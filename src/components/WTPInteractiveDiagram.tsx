@@ -14,17 +14,17 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { supabase } from "../lib/supabaseClient"; // Supabase client
 
 /********************
  * Ticketmatch — Wharton resale at face value or less
  * --------------------------------------------------
- * This component is self-contained for local prototyping:
- *  - Auth: demo-only (localStorage). Username + password + @upenn.edu email + +1 phone.
- *  - Replace-mode postings: one BUY and one SELL per (user,event).
- *  - Public charts + private matches view.
+ * Supabase Auth (email/password) + profiles table
+ * Supabase-backed postings (replace-mode per device,event,role)
+ * Recovery email must be @wharton.upenn.edu
  ********************/
 
-/* ========== UI primitives (unstyled except Tailwind) ========== */
+/* ========== UI primitives ========== */
 const Card: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
   className = "",
   children,
@@ -114,31 +114,22 @@ const GhostButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({
 
 /* ========== Types & helpers ========== */
 type Role = "buyer" | "seller";
-interface Account {
-  id: string;
-  username: string; // normalized "First Last WG '26|27"
-  password: string; // demo-only
-  recoveryEmail: string; // @upenn.edu
-  phone: string; // +1XXXXXXXXXX
-}
 interface Posting {
   id: string;
-  userId: string;
+  userId: string; // device_id (for postings) or auth user id (for UI matching current session)
   eventId: string;
   role: Role;
   percent: number; // 0..100
   tickets: number; // 1..4
-  name: string; // from username
+  name: string; // from profile.username
   phone: string; // E.164
 }
 
-const uid = () => Math.random().toString(36).slice(2);
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 const toMoney = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
 const onlyDigits = (s: string) => (s || "").replace(/\D+/g, "");
 const e164FromDigits = (digits: string) => `+1${onlyDigits(digits).slice(0, 10)}`;
 
-// Accept WG '26 / WG26 / WG 26 and normalize to WG '26
 function isValidUsername(u: string) {
   return /^[A-Za-z]+\s+[A-Za-z]+\s+WG\s*'?\s*(26|27)$/i.test(u.trim());
 }
@@ -146,7 +137,7 @@ function normalizeUsername(u: string) {
   return u.trim().replace(/\bWG\s*'?\s*(26|27)\b/i, "WG '$1");
 }
 function isValidEduEmail(e: string) {
-  return /@upenn\.edu$/i.test((e || "").trim());
+  return /@wharton\.upenn\.edu$/i.test((e || "").trim());
 }
 function isValidUSPhone(p: string) {
   return /^\+1\d{10}$/.test((p || "").trim());
@@ -154,22 +145,6 @@ function isValidUSPhone(p: string) {
 
 /* ========== Event constant ========== */
 const EVENTS = [{ id: "rb", label: "Red and Blue Ball - $60", price: 60 }];
-
-/* ========== localStorage helpers ========== */
-const LS_ACCOUNTS = "ticketmatch_accounts";
-const LS_SESSION = "ticketmatch_session";
-const LS_POSTINGS = "ticketmatch_postings";
-function load<T>(k: string, d: T): T {
-  try {
-    const raw = localStorage.getItem(k);
-    return raw ? JSON.parse(raw) : d;
-  } catch {
-    return d;
-  }
-}
-function save<T>(k: string, v: T) {
-  localStorage.setItem(k, JSON.stringify(v));
-}
 
 /* ========== Charts math ========== */
 function makeBins(step = 5) {
@@ -182,7 +157,6 @@ function makeBins(step = 5) {
   bins.push({ key: `100%`, min: 100, max: 100, mid: 100 });
   return bins;
 }
-
 function histogram(values: number[], step = 5) {
   const bins = makeBins(step);
   const counts = bins.map((b) => ({ ...b, count: 0 }));
@@ -197,10 +171,8 @@ function histogram(values: number[], step = 5) {
   }
   return counts;
 }
-
 function curves(sellers: number[], buyers: number[]) {
-  const pts: { p: number; supply: number; demand: number; matched: number }[] =
-    [];
+  const pts: { p: number; supply: number; demand: number; matched: number }[] = [];
   const sSorted = [...sellers].sort((a, b) => a - b);
   const bSorted = [...buyers].sort((a, b) => a - b);
   for (let p = 0; p <= 100; p += 1) {
@@ -208,7 +180,6 @@ function curves(sellers: number[], buyers: number[]) {
     const demand = bSorted.filter((b) => b >= p).length;
     pts.push({ p, supply, demand, matched: Math.min(supply, demand) });
   }
-  // pick best by matched, then by balance, then by higher p
   let best = pts[0];
   for (const pt of pts) {
     const betterMatched = pt.matched > best.matched;
@@ -222,117 +193,224 @@ function curves(sellers: number[], buyers: number[]) {
   }
   return { points: pts, clearing: best };
 }
-
 function literalBrackets() {
   return " <> ";
 }
 
-/* ========== Auth (demo-only) ========== */
+/* ========== Supabase Auth + Profile ========== */
 function useAccountAuth() {
-  const [accounts, setAccounts] = useState<Account[]>(() =>
-    load<Account[]>(LS_ACCOUNTS, [])
-  );
-  const [session, setSession] = useState<string | null>(() =>
-    load<string | null>(LS_SESSION, null)
-  );
+  const [profile, setProfile] = useState<{
+    id: string;
+    username: string;
+    phone: string;
+  } | null>(null);
 
-  function createAccount(a: Omit<Account, "id">) {
+  useEffect(() => {
+    let mounted = true;
+    async function load() {
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user ?? null;
+      if (!user) {
+        if (mounted) setProfile(null);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id, username, phone_e164")
+        .eq("id", user.id)
+        .maybeSingle();
+      if (error) {
+        console.error(error);
+        if (mounted) setProfile(null);
+        return;
+      }
+      if (mounted && data) {
+        setProfile({ id: data.id, username: data.username, phone: data.phone_e164 });
+      }
+    }
+    load();
+    const { data: sub } = supabase.auth.onAuthStateChange(() => load());
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  // Sign up + ensure session + insert profile (RLS needs auth.uid())
+  async function signUpWithProfile(params: {
+    email: string;
+    password: string;
+    username: string;
+    recoveryEmail: string;
+    phone: string;
+  }) {
+    const uname = normalizeUsername(params.username);
     const errors: string[] = [];
-    a.username = normalizeUsername(a.username);
-    if (!isValidUsername(a.username))
-      errors.push(
-        "Username must be First Last WG '26 or WG '27 (WG26/WG 27 accepted)"
-      );
-    if (!isValidEduEmail(a.recoveryEmail))
-      errors.push("Recovery email must be @upenn.edu");
-    if (!isValidUSPhone(a.phone))
+    if (!isValidUsername(uname))
+      errors.push("Username must be First Last WG '26 or WG '27 (WG26/WG 27 accepted)");
+    if (!isValidEduEmail(params.recoveryEmail))
+      errors.push("Recovery email must be @wharton.upenn.edu");
+    if (!isValidUSPhone(params.phone))
       errors.push("Phone must be a US number beginning with +1 and 10 digits");
-    if (a.password.length < 8)
+    if ((params.password || "").length < 8)
       errors.push("Password must be at least 8 characters");
-    if (
-      accounts.some(
-        (u) =>
-          u.username.toLowerCase() === a.username.trim().toLowerCase()
-      )
-    )
-      errors.push("Username already exists");
-    if (
-      accounts.some(
-        (u) => (u.phone || "").trim() === (a.phone || "").trim()
-      )
-    )
-      errors.push("Phone number is already tied to an existing account");
     if (errors.length) throw new Error(errors.join("; "));
 
-    const acc: Account = { id: uid(), ...a };
-    const next = [acc, ...accounts];
-    setAccounts(next);
-    save(LS_ACCOUNTS, next);
-    setSession(acc.id);
-    save(LS_SESSION, acc.id);
-    return acc;
+    const { data: signUp, error: signUpErr } = await supabase.auth.signUp({
+      email: params.email,
+      password: params.password,
+    });
+    if (signUpErr) throw signUpErr;
+
+    // Ensure active session for RLS insert
+    let { data: sess } = await supabase.auth.getSession();
+    if (!sess.session) {
+      const { error: loginErr } = await supabase.auth.signInWithPassword({
+        email: params.email,
+        password: params.password,
+      });
+      if (loginErr) throw loginErr;
+      ({ data: sess } = await supabase.auth.getSession());
+    }
+    const user = sess.session?.user;
+    if (!user) throw new Error("No active session after sign up");
+
+    const { error: profErr } = await supabase.from("profiles").insert({
+      id: user.id,
+      username: uname,
+      phone_e164: params.phone,
+      recovery_email: params.recoveryEmail,
+    });
+    if (profErr) throw profErr;
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("id, username, phone_e164")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) setProfile({ id: data.id, username: data.username, phone: data.phone_e164 });
   }
 
-  function signIn(username: string, password: string) {
-    const u = accounts.find(
-      (a) =>
-        a.username.toLowerCase() ===
-          normalizeUsername(username).toLowerCase() && a.password === password
-    );
-    if (!u) throw new Error("Invalid credentials");
-    setSession(u.id);
-    save(LS_SESSION, u.id);
-    return u;
+  async function signIn(email: string, password: string) {
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
   }
 
-  function signOut() {
-    setSession(null);
-    save(LS_SESSION, null);
+  async function signOut() {
+    await supabase.auth.signOut();
+    setProfile(null);
   }
 
-  const currentUser = session
-    ? accounts.find((a) => a.id === session) || null
+  const currentUser = profile
+    ? { id: profile.id, username: profile.username, phone: profile.phone }
     : null;
 
-  return { accounts, currentUser, createAccount, signIn, signOut } as const;
+  return { currentUser, signUpWithProfile, signIn, signOut } as const;
 }
 
-/* ========== Postings (replace mode; one BUY and one SELL per user+event) ========== */
+/* ========== per-browser device id (replace-mode key for postings) ========== */
+function getDeviceId() {
+  const KEY = "ticketmatch_device_id";
+  if (typeof window === "undefined") return "server";
+  let id = localStorage.getItem(KEY);
+  if (!id) {
+    id = Math.random().toString(36).slice(2);
+    localStorage.setItem(KEY, id);
+  }
+  return id;
+}
+
+/* ========== Postings (Supabase-backed) ========== */
 function usePostings() {
-  const [postings, setPostings] = useState<Posting[]>(() =>
-    load<Posting[]>(LS_POSTINGS, [])
-  );
-  useEffect(() => save(LS_POSTINGS, postings), [postings]);
+  const [postings, setPostings] = useState<Posting[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
+  const deviceId = typeof window !== "undefined" ? getDeviceId() : "server";
 
-  /**
-   * upsertPosting — Replace mode per (user,event,role).
-   * Returns { replaced } to show a friendly message.
-   */
-  function upsertPosting(
-    p: Omit<Posting, "id"> & { id?: string }
-  ): { replaced: boolean } {
-    if (!p) throw new Error("Invalid posting payload");
-    const phone = (p.phone || "").trim();
-    const event = (p.eventId || "").trim();
-    if (!phone || !isValidUSPhone(phone))
-      throw new Error("Phone must be +1 followed by 10 digits");
-    if (!event) throw new Error("Missing event");
+  async function loadAll() {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("postings_public")
+      .select(
+        "id, device_id, event_id, role, percent, tickets, username, phone_e164, created_at"
+      )
+      .order("created_at", { ascending: false });
 
-    let replaced = false;
-    setPostings((prev) => {
-      const hadSame = prev.some(
-        (x) => x.userId === p.userId && x.eventId === p.eventId && x.role === p.role
-      );
-      replaced = hadSame;
-      const withoutSame = prev.filter(
-        (x) => !(x.userId === p.userId && x.eventId === p.eventId && x.role === p.role)
-      );
-      return [...withoutSame, { id: p.id || uid(), ...p, phone }];
-    });
-    return { replaced };
+    if (error) {
+      console.error(error);
+      setLoading(false);
+      return;
+    }
+
+    const mapped = (data || []).map((r: any) => ({
+      id: r.id,
+      userId: r.device_id,
+      eventId: r.event_id,
+      role: r.role,
+      percent: r.percent,
+      tickets: r.tickets,
+      name: r.username,
+      phone: r.phone_e164,
+    })) as Posting[];
+
+    setPostings(mapped);
+    setLoading(false);
   }
 
-  return { postings, upsertPosting } as const;
+  useEffect(() => {
+    loadAll();
+    const channel = supabase
+      .channel("postings_public_changes")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "postings_public" },
+        () => loadAll()
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Replace mode: one BUY and one SELL per device+event
+  async function upsertPosting(
+    p: Omit<Posting, "id"> & { id?: string }
+  ): Promise<{ replaced: boolean }> {
+    const { data: existing, error: findErr } = await supabase
+      .from("postings_public")
+      .select("id")
+      .eq("device_id", deviceId)
+      .eq("event_id", p.eventId)
+      .eq("role", p.role)
+      .limit(1)
+      .maybeSingle();
+
+    if (findErr) throw findErr;
+
+    const payload = {
+      id: existing?.id,
+      device_id: deviceId,
+      event_id: p.eventId,
+      role: p.role,
+      percent: p.percent,
+      tickets: p.tickets,
+      username: p.name,
+      phone_e164: p.phone,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error: upsertErr } = await supabase
+      .from("postings_public")
+      .upsert(payload, { onConflict: "id" });
+
+    if (upsertErr) throw upsertErr;
+
+    await loadAll();
+    return { replaced: !!existing?.id };
+  }
+
+  return { postings, upsertPosting, loading } as const;
 }
 
 /* ========== Matching (direct) ========== */
@@ -341,8 +419,12 @@ function computeDirectMatchesForUser(
   eventId: string,
   postings: Posting[]
 ) {
-  const mine = postings.filter((p) => p.userId === userId && p.eventId === eventId);
-  const others = postings.filter((p) => p.userId !== userId && p.eventId === eventId);
+  const mine = postings.filter(
+    (p) => p.userId === userId && p.eventId === eventId
+  );
+  const others = postings.filter(
+    (p) => p.userId !== userId && p.eventId === eventId
+  );
   const matches: {
     me: Posting;
     other: Posting;
@@ -358,7 +440,7 @@ function computeDirectMatchesForUser(
       feasible.sort((a, b) => a.percent - b.percent);
       if (feasible.length) {
         const best = feasible[0];
-        const agreedPct = Math.min(me.percent, best.percent); // no upcharge
+        const agreedPct = Math.min(me.percent, best.percent);
         matches.push({
           me,
           other: best,
@@ -388,7 +470,7 @@ function computeDirectMatchesForUser(
 
 /* ========== Main component ========== */
 export default function WTPInteractiveDiagram() {
-  const { currentUser, createAccount, signIn, signOut } = useAccountAuth();
+  const { currentUser, signUpWithProfile, signIn, signOut } = useAccountAuth();
   const { postings, upsertPosting } = usePostings();
 
   // Auth UI state
@@ -396,9 +478,10 @@ export default function WTPInteractiveDiagram() {
   const [authError, setAuthError] = useState<string>("");
 
   const [username, setUsername] = useState("");
+  const [authEmail, setAuthEmail] = useState(""); // email used to sign in
   const [password, setPassword] = useState("");
   const [recoveryEmail, setRecoveryEmail] = useState("");
-  const [phoneDigits, setPhoneDigits] = useState(""); // user-typed 10 digits only
+  const [phoneDigits, setPhoneDigits] = useState("");
 
   // Posting inputs
   const [eventId, setEventId] = useState<string>(EVENTS[0].id);
@@ -486,45 +569,56 @@ export default function WTPInteractiveDiagram() {
     [currentUser, eventId, postings]
   );
 
-  /* ===== Auth handlers ===== */
+  /* ===== Auth handlers (Supabase) ===== */
   function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setAuthError("");
-    try {
-      const fullPhone = e164FromDigits(phoneDigits);
-      if (!isValidUSPhone(fullPhone))
-        throw new Error("Phone must be +1 and 10 digits");
-      createAccount({
-        username: username.trim(),
-        password,
-        recoveryEmail: recoveryEmail.trim(),
-        phone: fullPhone,
-      });
-      setPassword("");
-    } catch (err: any) {
-      setAuthError(err.message || String(err));
-    }
+    (async () => {
+      try {
+        const fullPhone = e164FromDigits(phoneDigits);
+        if (!isValidUSPhone(fullPhone))
+          throw new Error("Phone must be +1 and 10 digits");
+        if (!isValidEduEmail(recoveryEmail))
+          throw new Error("Recovery email must be @wharton.upenn.edu");
+
+        // Use recovery email as the account email per your flow
+        await signUpWithProfile({
+          email: recoveryEmail.trim(),
+          password,
+          username: username.trim(),
+          recoveryEmail: recoveryEmail.trim(),
+          phone: fullPhone,
+        });
+        setPassword("");
+        alert("Account created. If confirmations are enabled, check your email.");
+      } catch (err: any) {
+        setAuthError(err.message || String(err));
+      }
+    })();
   }
+
   function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setAuthError("");
-    try {
-      signIn(username.trim(), password);
-      setPassword("");
-    } catch (err: any) {
-      setAuthError(err.message || String(err));
-    }
+    (async () => {
+      try {
+        await signIn(authEmail.trim(), password);
+        setPassword("");
+      } catch (err: any) {
+        setAuthError(err.message || String(err));
+      }
+    })();
   }
 
-  /* ===== Posting handler ===== */
-  function postIntent() {
+  /* ===== Posting handler (async) ===== */
+  async function postIntent() {
     if (!currentUser) {
       alert("Please sign in first");
       return;
     }
     const name = currentUser.username;
     const p: Omit<Posting, "id"> = {
-      userId: currentUser.id,
+      userId: currentUser.id, // used for matching list (UI)
       eventId,
       role,
       percent: Math.round(clamp01((percent || 0) / 100) * 100),
@@ -533,7 +627,7 @@ export default function WTPInteractiveDiagram() {
       phone: currentUser.phone,
     };
     try {
-      const { replaced } = upsertPosting(p);
+      const { replaced } = await upsertPosting(p);
       setPercent(100);
       setTickets(1);
       setPostSuccess(true);
@@ -565,12 +659,8 @@ export default function WTPInteractiveDiagram() {
     console.assert(isValidUsername("Ann Lee WG 27"), "username WG 27 ok");
     console.assert(isValidUSPhone("+11234567890"), "+1 phone valid");
     console.assert(!isValidUSPhone("123-456-7890"), "non +1 invalid");
-    console.assert(isValidEduEmail("a@upenn.edu"), "upenn email ok");
-    console.assert(!isValidEduEmail("a@mit.edu"), "non-upenn invalid");
-    console.assert(
-      e164FromDigits("215-555-1212") === "+12155551212",
-      "digits->E.164 ok"
-    );
+    console.assert(isValidEduEmail("a@wharton.upenn.edu"), "wharton email ok");
+    console.assert(!isValidEduEmail("a@upenn.edu"), "non-wharton invalid");
     const lbl = `Seller${literalBrackets()}Buyer`;
     console.assert(
       lbl.includes(" <> ") && lbl.includes("Seller") && lbl.includes("Buyer"),
@@ -587,25 +677,26 @@ export default function WTPInteractiveDiagram() {
           <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
           <p className="text-gray-700 mt-2 max-w-3xl">
             <strong>Plans change all the time at Wharton.</strong> This helps
-            you buy and sell tickets on the resale market at your price point.  Subscribe for market data, notifications and better connections with your peers. No
-            upcharging, no large arbitrage, and no transaction fees. 
+            you buy and sell tickets on the resale market at your price point.
+            Subscribe for market data, notifications and better connections with
+            your peers. No upcharging, no large arbitrage, and no transaction fees.
           </p>
 
-          {/* Subscribe (informational) */}
+        {/* Subscribe (informational) */}
           <Card className="p-4 mt-4">
             <div className="text-sm text-gray-700 max-w-3xl space-y-2">
               <p className="text-gray-700">
-                <strong>Subscribe.</strong>{" "}
-                <em>This is a free trial</em>.
+                <strong>Subscribe.</strong> <em>This is a free trial</em>.
               </p>
               <p className="text-gray-700">
                 <em>Venmo @payajb $5 to maintain one month of this subscription
-                access</em> that provides you with market data and matches in order to save big! 
+                  access</em> that provides you with market data and matches in
+                order to save big!
               </p>
               <p className="text-gray-700">
-                Highest tier subscribers will soon receive SMS match notifications, closest matches, 
-                and priority matches. Let us know if there's
-                something you want to see!
+                Highest tier subscribers will soon receive SMS match
+                notifications, closest matches, and priority matches. Let us
+                know if there's something you want to see!
               </p>
             </div>
           </Card>
@@ -616,12 +707,34 @@ export default function WTPInteractiveDiagram() {
           <Card className="p-5 mb-6">
             <SectionTitle
               title="Create an account or sign in"
-              subtitle="Usernames must be First Last WG '26 or WG '27 (WG26/WG 27 variations accepted). Recovery email must be @upenn.edu. US phone must begin with +1."
+              subtitle="Usernames must be First Last WG '26 or WG '27 (WG26/WG 27 variations accepted). Recovery email must be @wharton.upenn.edu. US phone must begin with +1."
             />
             <form
               onSubmit={authMode === "signup" ? handleSignup : handleLogin}
               className="grid grid-cols-1 md:grid-cols-2 gap-4"
             >
+              <div>
+                <Label>Email (for sign in)</Label>
+                <Input
+                  type="email"
+                  placeholder="you@example.com"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div>
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  placeholder="At least 8 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+
               <div className="md:col-span-2">
                 <Label>Username</Label>
                 <Input
@@ -635,23 +748,14 @@ export default function WTPInteractiveDiagram() {
                   violating this will be deleted.
                 </div>
               </div>
-              <div>
-                <Label>Password</Label>
-                <Input
-                  type="password"
-                  placeholder="At least 8 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
+
               {authMode === "signup" && (
                 <div className="contents">
                   <div>
-                    <Label>Recovery Email (@upenn.edu)</Label>
+                    <Label>Recovery Email (@wharton.upenn.edu)</Label>
                     <Input
                       type="email"
-                      placeholder="you@upenn.edu"
+                      placeholder="you@wharton.upenn.edu"
                       value={recoveryEmail}
                       onChange={(e) => setRecoveryEmail(e.target.value)}
                       required
@@ -681,6 +785,7 @@ export default function WTPInteractiveDiagram() {
                   </div>
                 </div>
               )}
+
               <div className="md:col-span-2 flex items-center gap-2">
                 <Button type="submit">
                   {authMode === "signup" ? "Create account" : "Sign in"}
@@ -828,8 +933,7 @@ export default function WTPInteractiveDiagram() {
                               {buyerFirst.name} — <strong>{agreedPct}%</strong>{" "}
                               value of ticket
                               <div className="text-xs text-gray-500">
-                                {m.tickets} ticket(s) • Contact:{" "}
-                                {buyerFirst.phone}
+                                {m.tickets} ticket(s) • Contact: {buyerFirst.phone}
                               </div>
                             </div>
                             <div className="text-right text-xs text-gray-500">
@@ -953,23 +1057,16 @@ export default function WTPInteractiveDiagram() {
                     </div>
                     <div className="text-2xl font-bold">{clearing?.p ?? 0}%</div>
                     <div className="text-sm text-gray-600">
-                      ≈ {toMoney(clearingPriceDollars)} at face value{" "}
-                      {toMoney(eventPrice)}
+                      ≈ {toMoney(clearingPriceDollars)} at face value {toMoney(eventPrice)}
                     </div>
                   </Card>
                   <Card className="p-4">
-                    <div className="text-sm text-gray-500">
-                      Matched Trades at p*
-                    </div>
+                    <div className="text-sm text-gray-500">Matched Trades at p*</div>
                     <div className="text-2xl font-bold">{matchedTrades}</div>
-                    <div className="text-xs text-gray-500">
-                      min(supply, demand) at p*
-                    </div>
+                    <div className="text-xs text-gray-500">min(supply, demand) at p*</div>
                   </Card>
                   <Card className="p-4">
-                    <div className="text-sm text-gray-500">
-                      Per-Unit Spread (p* − avg seller)
-                    </div>
+                    <div className="text-sm text-gray-500">Per-Unit Spread (p* − avg seller)</div>
                     <div className="text-xl font-semibold">
                       {spreadStats.perUnitSpreadPct.toFixed(2)}%
                     </div>
