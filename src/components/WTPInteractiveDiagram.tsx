@@ -959,7 +959,7 @@ export default function WTPInteractiveDiagram() {
             <Card className="p-5">
               <SectionTitle
                 title="Public Distribution (Sellers vs Buyers)"
-                subtitle="Left bars = sellers (negative), right bars = buyers. Aggregated for Red and Blue Ball."
+                subtitle="Aggregated for Red and Blue Ball."
               />
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
@@ -984,10 +984,10 @@ export default function WTPInteractiveDiagram() {
                       width={70}
                     />
                     <Tooltip
-                      formatter={(value: any, name: any) => [
-                        Math.abs(Number(value)),
-                        name === "seller" ? "Sellers" : "Buyers",
-                      ]}
+                    formatter={(value: any, _name: any, props: any) => [
+                    Math.abs(Number(value)),
+                    props?.dataKey === "seller" ? "Sellers" : "Buyers",
+                    ]}
                     />
                     <Legend />
                     <Bar dataKey="seller" name="Sellers" fill="#6366F1" />
@@ -1014,17 +1014,17 @@ export default function WTPInteractiveDiagram() {
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="p" tickFormatter={(v) => `${v}%`} />
                         <YAxis allowDecimals={false} />
-                        <Tooltip
-                          labelFormatter={(label: any) => `Price: ${label}%`}
-                          formatter={(value: any, name: any) => [
-                            value,
-                            name === "supply"
-                              ? "Supply (sellers)"
-                              : name === "demand"
-                              ? "Demand (buyers)"
-                              : name,
-                          ]}
-                        />
+                       <Tooltip
+  labelFormatter={(label: any) => `Price: ${label}%`}
+  formatter={(value: any, _name: any, props: any) => [
+    value,
+    props?.dataKey === "supply"
+      ? "Supply (sellers)"
+      : props?.dataKey === "demand"
+      ? "Demand (buyers)"
+      : props?.name,
+  ]}
+/>
                         <Legend />
                         <ReferenceLine
                           x={clearing?.p ?? 0}
