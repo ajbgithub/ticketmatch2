@@ -1,18 +1,25 @@
-// eslint.config.mjs
+import { dirname } from "path";
+import { fileURLToPath } from "url";
+import { FlatCompat } from "@eslint/eslintrc";
 
-import next from "eslint-config-next";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-/** @type {import("eslint").Linter.Config[]} */
-export default [
+const compat = new FlatCompat({
+  baseDirectory: __dirname,
+});
+
+const eslintConfig = [
+  ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
-    ignores: ["**/node_modules/**", ".next/**"],
-  },
-  ...next,
-  // ✅ Our overrides (placed after `next` so they win)
-  {
-    rules: {
-      "@typescript-eslint/no-explicit-any": "off",
-      "react/no-unescaped-entities": "off",
-    },
+    ignores: [
+      "node_modules/**",
+      ".next/**",
+      "out/**",
+      "build/**",
+      "next-env.d.ts",
+    ],
   },
 ];
+
+export default eslintConfig;
