@@ -114,14 +114,14 @@ interface Profile {
   id: string;
   username: string;
   wharton_email: string;
-  recovery_email?: string; // if present in your schema
+  recovery_email?: string;
   cohort: "WG26" | "WG27";
   phone_e164: string;
   venmo_handle: string;
 }
 interface Posting {
   id: string;
-  userId: string; // created_by (preferred) or device_id fallback
+  userId: string; // device_id (or created_by in future)
   eventId: string;
   role: Role;
   percent: number; // 0..100
@@ -135,6 +135,7 @@ const EVENTS = [{ id: "rb", label: "Red and Blue Ball - $60", price: 60 }];
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 const toMoney = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
 const onlyDigits = (s: string) => (s || "").replace(/\D+/g, "");
+
 const getDeviceId = () => {
   if (typeof window === "undefined") return "server";
   const k = "ticketmatch_device_id";
@@ -161,7 +162,6 @@ function buildE164(code: string, digits: string) {
   return `${c}${d}`;
 }
 function isValidE164(e164: string) {
-  // Allow international: +[country/area][6..14 digits]
   return /^\+\d{6,16}$/.test((e164 || "").trim());
 }
 function normalizeVenmo(h: string) {
@@ -174,21 +174,8 @@ function isValidVenmo(h: string) {
 
 /* Common area/country codes for dropdown */
 const AREA_CODES = [
-  "+1",  // US/Canada
-  "+44", // UK
-  "+61", // Australia
-  "+81", // Japan
-  "+82", // South Korea
-  "+91", // India
-  "+33", // France
-  "+49", // Germany
-  "+39", // Italy
-  "+34", // Spain
-  "+86", // China
-  "+971",// UAE
-  "+65", // Singapore
-  "+852",// Hong Kong
-  "+353" // Ireland
+  "+1", "+44", "+61", "+81", "+82", "+91",
+  "+33", "+49", "+39", "+34", "+86", "+971", "+65", "+852", "+353"
 ];
 
 /* ---------- charts math ---------- */
@@ -219,8 +206,7 @@ function histogram(values: number[], step = 5) {
 }
 
 function curves(sellers: number[], buyers: number[]) {
-  const pts: { p: number; supply: number; demand: number; matched: number }[] =
-    [];
+  const pts: { p: number; supply: number; demand: number; matched: number }[] = [];
   const sSorted = [...sellers].sort((a, b) => a - b);
   const bSorted = [...buyers].sort((a, b) => a - b);
   for (let p = 0; p <= 100; p += 1) {
@@ -228,17 +214,13 @@ function curves(sellers: number[], buyers: number[]) {
     const demand = bSorted.filter((b) => b >= p).length;
     pts.push({ p, supply, demand, matched: Math.min(supply, demand) });
   }
-  // choose p* by best matched, then by balance, then by higher p
   let best = pts[0];
   for (const pt of pts) {
     const betterMatched = pt.matched > best.matched;
     const tieMatched = pt.matched === best.matched;
-    const betterBalance =
-      Math.abs(pt.supply - pt.demand) < Math.abs(best.supply - best.demand);
-    const tieBalance =
-      Math.abs(pt.supply - pt.demand) === Math.abs(best.supply - best.demand);
-    if (betterMatched || (tieMatched && (betterBalance || (tieBalance && pt.p > best.p))))
-      best = pt;
+    const betterBalance = Math.abs(pt.supply - pt.demand) < Math.abs(best.supply - best.demand);
+    const tieBalance = Math.abs(pt.supply - pt.demand) === Math.abs(best.supply - best.demand);
+    if (betterMatched || (tieMatched && (betterBalance || (tieBalance && pt.p > best.p)))) best = pt;
   }
   return { points: pts, clearing: best };
 }
@@ -270,7 +252,7 @@ function usePostings() {
 
       const mapped: Posting[] = (data || []).map((r: any) => ({
         id: r.id,
-        userId: r.device_id, // if you later add created_by, swap to r.created_by ?? r.device_id
+        userId: r.device_id,
         eventId: r.event_id,
         role: r.role,
         percent: r.percent,
@@ -316,7 +298,9 @@ function usePostings() {
       phone_e164: p.phone,
       updated_at: new Date().toISOString(),
     };
-    const { error } = await supabase.from("postings_public").upsert(payload);
+    const { error } = await supabase
+      .from("postings_public")
+      .upsert(payload, { onConflict: "device_id,event_id,role" }); // <-- important
     if (error) throw error;
     await loadAll();
   }
@@ -341,23 +325,19 @@ function computeDirectMatchesForUser(
 
   for (const me of mine) {
     if (me.role === "buyer") {
-      const feasible = others.filter(
-        (o) => o.role === "seller" && me.percent >= o.percent
-      );
+      const feasible = others.filter((o) => o.role === "seller" && me.percent >= o.percent);
       feasible.sort((a, b) => a.percent - b.percent);
       if (feasible.length) {
         const best = feasible[0];
         matches.push({
           me,
           other: best,
-          agreedPct: Math.min(me.percent, best.percent), // no upcharge
+          agreedPct: Math.min(me.percent, best.percent),
           tickets: Math.min(me.tickets, best.tickets),
         });
       }
     } else {
-      const feasible = others.filter(
-        (o) => o.role === "buyer" && o.percent >= me.percent
-      );
+      const feasible = others.filter((o) => o.role === "buyer" && o.percent >= me.percent);
       feasible.sort((a, b) => b.percent - a.percent);
       if (feasible.length) {
         const best = feasible[0];
@@ -404,6 +384,9 @@ export default function WTPInteractiveDiagram() {
   const [tickets, setTickets] = useState<number>(1);
   const [postSuccess, setPostSuccess] = useState(false);
   const [postInfo, setPostInfo] = useState("");
+
+  /* ----- identify this browser/device for matching ----- */
+  const myDeviceId = typeof window !== "undefined" ? getDeviceId() : "server";
 
   /* ----- bootstrap session ----- */
   useEffect(() => {
@@ -482,9 +465,8 @@ export default function WTPInteractiveDiagram() {
           phone_e164: phoneE164,
           venmo_handle: venmoId,
           wharton_email: whartonEmail.trim(),
+          recovery_email: whartonEmail.trim(), // if your schema requires NOT NULL
         };
-        // If your schema still has recovery_email NOT NULL, set it equal to wharton_email
-        insertPayload.recovery_email = whartonEmail.trim();
 
         const { error: profErr } = await supabase.from("profiles").insert(insertPayload);
         if (profErr) {
@@ -493,7 +475,7 @@ export default function WTPInteractiveDiagram() {
           throw profErr;
         }
 
-        // 3) username->email mapping for future username-only logins
+        // 3) username->email mapping for username-only login
         await supabase.from("username_lookup").upsert({
           username_lower: uname.toLowerCase(),
           email: whartonEmail.trim().toLowerCase(),
@@ -521,7 +503,6 @@ export default function WTPInteractiveDiagram() {
       try {
         const uname = normalizeUsername(username);
 
-        // If they typed an email directly, allow email+password login (must be wharton email)
         if (uname.includes("@")) {
           if (!isWhartonEmail(uname)) throw new Error("Use your @wharton.upenn.edu email or your Username.");
           const { error: authErr } = await supabase.auth.signInWithPassword({
@@ -530,7 +511,6 @@ export default function WTPInteractiveDiagram() {
           });
           if (authErr) throw new Error("Invalid email or password.");
         } else {
-          // username → email
           if (!isValidUsername(uname)) throw new Error("Username must be First Last.");
           const { data: rec, error: findErr } = await supabase
             .from("username_lookup")
@@ -547,7 +527,6 @@ export default function WTPInteractiveDiagram() {
           if (authErr) throw new Error("Invalid username or password.");
         }
 
-        // load profile
         const { data: sess } = await supabase.auth.getSession();
         const uid = sess.session?.user?.id;
         if (!uid) throw new Error("No active session.");
@@ -584,8 +563,8 @@ export default function WTPInteractiveDiagram() {
       const b = bHist[i] ?? { key: s.key, count: 0 };
       return {
         bucket: s.key || b.key,
-        seller: -(s.count || 0), // left side
-        buyer: b.count || 0,     // right side
+        seller: -(s.count || 0), // left side (purple)
+        buyer: b.count || 0,     // right side (green)
       };
     });
   }, [buyersPercents, sellersPercents]);
@@ -626,12 +605,10 @@ export default function WTPInteractiveDiagram() {
     };
   }, [clearing, sellersPercents, buyersPercents, eventPrice]);
 
+  /* >>> Use device_id for "my" matches <<< */
   const myMatches = useMemo(
-    () =>
-      currentUser
-        ? computeDirectMatchesForUser(currentUser.id, eventId, postings)
-        : [],
-    [currentUser, eventId, postings]
+    () => (myDeviceId ? computeDirectMatchesForUser(myDeviceId, eventId, postings) : []),
+    [myDeviceId, eventId, postings]
   );
 
   /* ----- posting handler ----- */
@@ -641,7 +618,7 @@ export default function WTPInteractiveDiagram() {
       return;
     }
     const p: Omit<Posting, "id"> = {
-      userId: currentUser.id, // for matching (DB stores device_id; you can add created_by later)
+      userId: myDeviceId, // use device_id for matching identity
       eventId,
       role,
       percent: Math.round(clamp01((percent || 0) / 100) * 100),
@@ -674,8 +651,8 @@ export default function WTPInteractiveDiagram() {
         <div className="mb-4">
           <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
           <p className="text-gray-700 mt-2 max-w-3xl">
-            Plans at Wharton change all the time. Buy and resell Wharton tickets at face value or lower. Create an account, and buy/sell at your desired percentage price point. See market data update live, and match with others nearest your price point. No upcharging, large arbitrage or transaction fees. 
-            Just matching peers at the closest level for big savings! Subscribe with $5 venmo to @payajb for a month's tiered accesses; highest tiers will receive data, SMS notifications, line-jump matching, and more after the free trial. 
+            Plans at Wharton change all the time! Buy and resell Wharton tickets at face value or lower. Create an account, and buy/sell at your desired percentage price point. See market data update live, and match with others at your price point. No upcharging, large arbitrage or transaction fees.
+            Just matching peers at the closest level for big savings! Subscribe with $5 venmo to @payajb for a month's tiered accesses; highest tiers will receive data, SMS notifications, priority matches, and more after the free trial.
           </p>
         </div>
 
@@ -899,6 +876,14 @@ export default function WTPInteractiveDiagram() {
                     title="My Matches"
                     subtitle="Direct matches at your price appear here with contact info."
                   />
+                  <p className="text-xs text-gray-500 mb-2">
+                    Closest-match alerts & auto-pairing are coming soon as part of the basic subscription tier.
+                  </p>
+                  {myMatches.length === 0 && (
+                    <div className="text-xs text-gray-400 mb-2">
+                      Tip: open a second browser/incognito so it uses a different device and post the opposite role at the same %.
+                    </div>
+                  )}
                   {myMatches.length === 0 ? (
                     <div className="text-sm text-gray-400">
                       No direct matches yet
@@ -907,8 +892,7 @@ export default function WTPInteractiveDiagram() {
                     <div className="space-y-2 max-h-48 overflow-auto text-sm">
                       {myMatches.slice(0, 10).map((m, i) => {
                         const buyerFirst = m.me.role === "buyer" ? m.me : m.other;
-                        const sellerFirst =
-                          m.me.role === "seller" ? m.me : m.other;
+                        const sellerFirst = m.me.role === "seller" ? m.me : m.other;
                         const agreedPct = m.agreedPct;
                         return (
                           <div
