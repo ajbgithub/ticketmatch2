@@ -128,6 +128,10 @@ interface Posting {
   tickets: number; // 1..4
   name: string;
   phone: string;
+  // optional metadata (only available for current user unless you add to postings_public)
+  cohort?: string;
+  venmo?: string;
+  email?: string;
 }
 
 const EVENTS = [{ id: "rb", label: "Red and Blue Ball - $60", price: 60 }];
@@ -300,7 +304,7 @@ function usePostings() {
     };
     const { error } = await supabase
       .from("postings_public")
-      .upsert(payload, { onConflict: "device_id,event_id,role" }); // <-- important
+      .upsert(payload, { onConflict: "device_id,event_id,role" });
     if (error) throw error;
     await loadAll();
   }
@@ -308,14 +312,19 @@ function usePostings() {
   return { postings, loading, upsertPosting, postingsError } as const;
 }
 
-/* ---------- matching ---------- */
+/* ---------- matching (by username) ---------- */
 function computeDirectMatchesForUser(
-  myUserId: string,
+  myUsername: string,
   eventId: string,
   postings: Posting[]
 ) {
-  const mine = postings.filter((p) => p.userId === myUserId && p.eventId === eventId);
-  const others = postings.filter((p) => p.userId !== myUserId && p.eventId === eventId);
+  const mine = postings.filter(
+    (p) => p.name === myUsername && p.eventId === eventId
+  );
+  const others = postings.filter(
+    (p) => p.name !== myUsername && p.eventId === eventId
+  );
+
   const matches: {
     me: Posting;
     other: Posting;
@@ -325,19 +334,23 @@ function computeDirectMatchesForUser(
 
   for (const me of mine) {
     if (me.role === "buyer") {
-      const feasible = others.filter((o) => o.role === "seller" && me.percent >= o.percent);
+      const feasible = others.filter(
+        (o) => o.role === "seller" && me.percent >= o.percent
+      );
       feasible.sort((a, b) => a.percent - b.percent);
       if (feasible.length) {
         const best = feasible[0];
         matches.push({
           me,
           other: best,
-          agreedPct: Math.min(me.percent, best.percent),
+          agreedPct: Math.min(me.percent, best.percent), // no upcharge
           tickets: Math.min(me.tickets, best.tickets),
         });
       }
     } else {
-      const feasible = others.filter((o) => o.role === "buyer" && o.percent >= me.percent);
+      const feasible = others.filter(
+        (o) => o.role === "buyer" && o.percent >= me.percent
+      );
       feasible.sort((a, b) => b.percent - a.percent);
       if (feasible.length) {
         const best = feasible[0];
@@ -350,6 +363,7 @@ function computeDirectMatchesForUser(
       }
     }
   }
+
   return matches;
 }
 
@@ -363,6 +377,13 @@ export default function WTPInteractiveDiagram() {
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [authMode, setAuthMode] = useState<"signup" | "login">("signup");
   const [authError, setAuthError] = useState("");
+
+const [deviceId, setDeviceId] = useState<string>("");
+useEffect(() => {
+  if (typeof window !== "undefined") {
+    setDeviceId(getDeviceId());
+  }
+}, []);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -418,7 +439,9 @@ export default function WTPInteractiveDiagram() {
         .maybeSingle();
       if (prof) setCurrentUser(prof as Profile);
     });
-    return () => sub.data.subscription.unsubscribe();
+    return () => {
+      sub.data.subscription.unsubscribe();
+    };
   }, []);
 
   /* ----- signup/login ----- */
@@ -465,7 +488,7 @@ export default function WTPInteractiveDiagram() {
           phone_e164: phoneE164,
           venmo_handle: venmoId,
           wharton_email: whartonEmail.trim(),
-          recovery_email: whartonEmail.trim(), // if your schema requires NOT NULL
+          recovery_email: whartonEmail.trim(), // if NOT NULL in schema
         };
 
         const { error: profErr } = await supabase.from("profiles").insert(insertPayload);
@@ -605,11 +628,11 @@ export default function WTPInteractiveDiagram() {
     };
   }, [clearing, sellersPercents, buyersPercents, eventPrice]);
 
-  /* >>> Use device_id for "my" matches <<< */
-  const myMatches = useMemo(
-    () => (myDeviceId ? computeDirectMatchesForUser(myDeviceId, eventId, postings) : []),
-    [myDeviceId, eventId, postings]
-  );
+ /* Use username for "my" matches */
+const myMatches = useMemo(() => {
+  if (!currentUser) return [];
+  return computeDirectMatchesForUser(currentUser.username, eventId, postings);
+}, [currentUser, eventId, postings]);
 
   /* ----- posting handler ----- */
   function postIntent() {
@@ -617,15 +640,15 @@ export default function WTPInteractiveDiagram() {
       alert("Please sign in first.");
       return;
     }
-    const p: Omit<Posting, "id"> = {
-      userId: myDeviceId, // use device_id for matching identity
-      eventId,
-      role,
-      percent: Math.round(clamp01((percent || 0) / 100) * 100),
-      tickets,
-      name: currentUser.username,
-      phone: currentUser.phone_e164,
-    };
+const p: Omit<Posting, "id"> = {
+  userId: deviceId,   // 👈 was getDeviceId(), now use the state
+  eventId,
+  role,
+  percent: Math.round(clamp01((percent || 0) / 100) * 100),
+  tickets,
+  name: currentUser.username,
+  phone: currentUser.phone_e164,
+};
     (async () => {
       try {
         await upsertPosting(p);
@@ -877,36 +900,46 @@ export default function WTPInteractiveDiagram() {
                     subtitle="Direct matches at your price appear here with contact info."
                   />
                   <p className="text-xs text-gray-500 mb-2">
-                    Closest-match alerts & auto-pairing are coming soon as part of the basic subscription tier.
+                    Closest-match alerts &amp; auto-pairing are coming soon as part of the basic subscription tier.
                   </p>
-                  {myMatches.length === 0 && (
-                    <div className="text-xs text-gray-400 mb-2">
-                      Tip: open a second browser/incognito so it uses a different device and post the opposite role at the same %.
-                    </div>
-                  )}
+
                   {myMatches.length === 0 ? (
-                    <div className="text-sm text-gray-400">
-                      No direct matches yet
-                    </div>
+                    <div className="text-sm text-gray-400">No direct matches yet</div>
                   ) : (
-                    <div className="space-y-2 max-h-48 overflow-auto text-sm">
+                    <div className="space-y-3 max-h-64 overflow-auto text-sm">
                       {myMatches.slice(0, 10).map((m, i) => {
-                        const buyerFirst = m.me.role === "buyer" ? m.me : m.other;
-                        const sellerFirst = m.me.role === "seller" ? m.me : m.other;
+                        const buyer = m.me.role === "buyer" ? m.me : m.other;
+                        const seller = m.me.role === "seller" ? m.me : m.other;
                         const agreedPct = m.agreedPct;
+                        const fmt = (v?: string) => (v && String(v).trim().length ? v : "—");
+
                         return (
-                          <div
-                            key={i}
-                            className="flex items-center justify-between gap-3"
-                          >
-                            <div>
-                              {sellerFirst.name} {" <> "} {buyerFirst.name} —{" "}
+                          <div key={i} className="p-3 border rounded-lg bg-gray-50">
+                            <div className="font-semibold mb-1">
+                              {seller.name} (Seller) {" <> "} {buyer.name} (Buyer) —{" "}
                               <strong>{agreedPct}%</strong> value of ticket
-                              <div className="text-xs text-gray-500">
-                                {m.tickets} ticket(s) • Contact: {buyerFirst.phone}
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-gray-700">
+                              <div>
+                                <div className="font-semibold">Seller</div>
+                                <div>Name: {fmt(seller.name)}</div>
+                                <div>WG: {fmt(seller.cohort)}</div>
+                                <div>Phone: {fmt(seller.phone)}</div>
+                                <div>Venmo: @{fmt(seller.venmo)}</div>
+                                <div>Email: {fmt(seller.email)}</div>
+                              </div>
+                              <div>
+                                <div className="font-semibold">Buyer</div>
+                                <div>Name: {fmt(buyer.name)}</div>
+                                <div>WG: {fmt(buyer.cohort)}</div>
+                                <div>Phone: {fmt(buyer.phone)}</div>
+                                <div>Venmo: @{fmt(buyer.venmo)}</div>
+                                <div>Email: {fmt(buyer.email)}</div>
                               </div>
                             </div>
-                            <div className="text-right text-xs text-gray-500">
+
+                            <div className="text-right text-xs text-gray-500 mt-1">
                               @ {toMoney((agreedPct / 100) * eventPrice)}
                             </div>
                           </div>
@@ -950,6 +983,7 @@ export default function WTPInteractiveDiagram() {
                     <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
                     <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
                     <Legend />
+                    {/* Order: Sellers then Buyers, per your request */}
                     <Bar dataKey="seller" name="Sellers" fill="#6366F1" />
                     <Bar dataKey="buyer" name="Buyers" fill="#10B981" />
                   </BarChart>
