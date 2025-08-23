@@ -674,9 +674,8 @@ export default function WTPInteractiveDiagram() {
         <div className="mb-4">
           <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
           <p className="text-gray-700 mt-2 max-w-3xl">
-            Buy and sell Wharton tickets at face value or lower. Create an account in a minute, post your willingness to
-            buy/sell, see market data update live, and match with others. No upcharging, large arbitrage or transaction fees. 
-            Tiered monthly/event subscription access coming soon for as low as $5. 
+            Plans at Wharton change all the time. Buy and resell Wharton tickets at face value or lower. Create an account, and buy/sell at your desired percentage price point. See market data update live, and match with others nearest your price point. No upcharging, large arbitrage or transaction fees. 
+            Just matching peers at the closest level for big savings! Subscribe with $5 venmo to @payajb for a month's tiered accesses; highest tiers will receive data, SMS notifications, line-jump matching, and more after the free trial. 
           </p>
         </div>
 
