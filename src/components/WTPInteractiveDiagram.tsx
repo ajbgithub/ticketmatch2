@@ -699,7 +699,7 @@ const p: Omit<Posting, "id"> = {
               <div className="md:col-span-2">
                 <Label>Username</Label>
                 <Input
-                  placeholder="Jane Doe"
+                  placeholder="Joe Wharton"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
