@@ -5,7 +5,7 @@ import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { X, MessageCircle, Trophy } from 'lucide-react';
+import { X, MessageCircle, Trophy, ChevronDown, ChevronUp } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 
 /* =========================
@@ -67,7 +67,7 @@ interface Profile {
 
 interface Posting {
   id: string;          // DB id as string
-  userId: string;      // device_id
+  userId: string;      // device_id (NOTE: table may also have user_id; not used here)
   eventId: string;     // event_id
   role: Role;          // 'buyer' | 'seller'
   percent: number;     // 0..100
@@ -79,12 +79,15 @@ interface Posting {
   email?: string;
 }
 
-interface Comment {
+interface ChatMessage {
   id: string;
+  user_id: string;
   username: string;
   message: string;
-  timestamp: Date;
+  created_at: string; // ISO string
 }
+
+interface Comment { id: string; username: string; message: string; timestamp: Date; } // legacy (unused now)
 interface Trade {
   id: string;
   buyerName: string;
@@ -102,7 +105,7 @@ const EVENTS = [
 
 const TIER_INFO: Record<Tier, { price: string; features: string[] }> = {
   Limited: { price: '$0/mo', features: ['Buy 1 and sell 1 at a time', 'Delete old posts to make new posts', 'See direct matches only', 'See 1-3 matches'] },
-  Basic:   { price: '$5/mo', features: ['Buy 2 and sell 2 at a time', 'Delete old posts to make new posts', 'See direct and closest matches within 10%'] },
+  Basic:   { price: '$5/mo', features: ['Buy 2 and sell 2 at a time', 'Delete old posts to make new posts', 'See direct + closest matches within 10%'] },
   Pro:     { price: '$10/mo', features: ['Buy 5 and sell 5 at a time', 'See direct matches and matches within 25%'] },
   Max:     { price: '$15/mo', features: ['SMS instant alerts', 'Unlimited trades', 'Match with entire market'] },
 };
@@ -141,16 +144,13 @@ export default function WTPInteractiveDiagram() {
   // DB-backed state
   const [postings, setPostings] = useState<Posting[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
+  const [chat, setChat] = useState<ChatMessage[]>([]);
 
   // UI state
   const [authMode, setAuthMode] = useState<'signup' | 'login'>('signup');
   const [authError, setAuthError] = useState<string>('');
-  const [showTierDropdown, setShowTierDropdown] = useState<Tier | null>(null);
-  const [totalTradedTickets, setTotalTradedTickets] = useState<number>(47);
-  const [comments, setComments] = useState<Comment[]>([
-    { id: '1', username: 'Alice Chen', message: 'Looking forward to the Red Ball!', timestamp: new Date() },
-    { id: '2', username: 'Bob Smith', message: 'Anyone selling White Party tickets below 80%?', timestamp: new Date() },
-  ]);
+  const [openTier, setOpenTier] = useState<Tier | null>(null);
+  const [totalTradedTickets, setTotalTradedTickets] = useState<number>(11);
   const [newComment, setNewComment] = useState<string>('');
   const [trades, setTrades] = useState<Trade[]>([]);
 
@@ -172,9 +172,10 @@ export default function WTPInteractiveDiagram() {
   const currentEvent = useMemo(() => EVENTS.find((e) => e.id === eventId), [eventId]);
   const eventPrice = currentEvent?.price ?? 0;
 
-  /* -------- Load session, profile, postings; wire realtime -------- */
+  /* -------- Load session, profile, postings, chat; wire realtime -------- */
   useEffect(() => {
-    let sub: ReturnType<typeof supabase.channel> | null = null;
+    let postsSub: ReturnType<typeof supabase.channel> | null = null;
+    let chatSub: ReturnType<typeof supabase.channel> | null = null;
 
     (async () => {
       const { data: s } = await supabase.auth.getSession();
@@ -195,41 +196,52 @@ export default function WTPInteractiveDiagram() {
         }
       }
 
-      await refreshPostings();
+      await Promise.all([refreshPostings(), refreshChat()]);
 
-      sub = supabase
+      // Realtime: postings
+      postsSub = supabase
         .channel('postings_public_stream')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'postings_public' },
-          (payload) => {
-            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
-              const r: any = payload.new;
-              setPostings((prev) => {
-                const rest = prev.filter((p) => p.id !== String(r.id));
-                return [
-                  ...rest,
-                  {
-                    id: String(r.id),
-                    userId: r.device_id,
-                    eventId: r.event_id,
-                    role: r.role,
-                    percent: r.percent,
-                    tickets: r.tickets,
-                    name: r.username,
-                    phone: r.phone_e164,
-                    cohort: r.cohort ?? undefined,
-                    venmo: r.venmo_handle ?? undefined,
-                    email: r.email ?? r.email_address ?? undefined,
-                  },
-                ];
-              });
-            } else if (payload.eventType === 'DELETE') {
-              const r: any = payload.old;
-              setPostings((prev) => prev.filter((p) => p.id !== String(r.id)));
-            }
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'postings_public' }, (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const r: any = payload.new;
+            setPostings((prev) => {
+              const rest = prev.filter((p) => p.id !== String(r.id));
+              return [
+                ...rest,
+                {
+                  id: String(r.id),
+                  userId: r.device_id,
+                  eventId: r.event_id,
+                  role: r.role,
+                  percent: r.percent,
+                  tickets: r.tickets,
+                  name: r.username,
+                  phone: r.phone_e164,
+                  cohort: r.cohort ?? undefined,
+                  venmo: r.venmo_handle ?? undefined,
+                  email: r.email ?? r.email_address ?? undefined,
+                },
+              ];
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const r: any = payload.old;
+            setPostings((prev) => prev.filter((p) => p.id !== String(r.id)));
           }
-        )
+        })
+        .subscribe();
+
+      // Realtime: chat
+      chatSub = supabase
+        .channel('chat_messages_stream')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'chat_messages' }, (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const r: any = payload.new;
+            setChat((prev) => [{ id: String(r.id), user_id: r.user_id, username: r.username, message: r.message, created_at: r.created_at }, ...prev].slice(0, 200));
+          } else if (payload.eventType === 'DELETE') {
+            const r: any = payload.old;
+            setChat((prev) => prev.filter((m) => m.id !== String(r.id)));
+          }
+        })
         .subscribe();
     })();
 
@@ -255,7 +267,8 @@ export default function WTPInteractiveDiagram() {
 
     return () => {
       authSub.subscription.unsubscribe();
-      if (sub) supabase.removeChannel(sub);
+      if (postsSub) supabase.removeChannel(postsSub);
+      if (chatSub) supabase.removeChannel(chatSub);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -288,54 +301,51 @@ export default function WTPInteractiveDiagram() {
     }
   };
 
+  const refreshChat = async () => {
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) {
+      console.error('Error fetching chat:', error);
+      return;
+    }
+    if (data) {
+      setChat(
+        data.map((r: any) => ({
+          id: String(r.id),
+          user_id: r.user_id,
+          username: r.username,
+          message: r.message,
+          created_at: r.created_at,
+        }))
+      );
+    }
+  };
+
   /* -------- Signup: auth + profile update (trigger pre-creates) -------- */
   const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setAuthError('');
 
     const uname = normalizeUsername(username);
-    if (!isValidUsername(uname)) {
-      setAuthError('Username must be First Last (e.g., "John Smith").');
-      return;
-    }
-    if (password.length < 8) {
-      setAuthError('Password must be at least 8 characters.');
-      return;
-    }
-    if (!isWhartonEmail(whartonEmail)) {
-      setAuthError('Email must end with @wharton.upenn.edu.');
-      return;
-    }
+    if (!isValidUsername(uname)) { setAuthError('Username must be First Last (e.g., "John Smith").'); return; }
+    if (password.length < 8)     { setAuthError('Password must be at least 8 characters.'); return; }
+    if (!isWhartonEmail(whartonEmail)) { setAuthError('Email must end with @wharton.upenn.edu.'); return; }
 
     const phoneE164 = buildE164(areaCode, phoneDigits);
-    if (!isValidE164(phoneE164)) {
-      setAuthError('Enter a valid phone number.');
-      return;
-    }
+    if (!isValidE164(phoneE164)) { setAuthError('Enter a valid phone number.'); return; }
 
     const venmoId = normalizeVenmo(venmo);
-    if (!isValidVenmo(venmoId)) {
-      setAuthError('Enter a valid Venmo handle (3-30 characters, letters/numbers/underscore only).');
-      return;
-    }
+    if (!isValidVenmo(venmoId)) { setAuthError('Enter a valid Venmo handle (3-30 chars, letters/numbers/_).'); return; }
 
     try {
-      const { data: sign, error: signErr } = await supabase.auth.signUp({
-        email: whartonEmail.trim(),
-        password,
-      });
-      if (signErr) {
-        setAuthError(`Sign up failed: ${signErr.message}`);
-        return;
-      }
-      if (!sign?.user) {
-        setAuthError('Sign up failed - no user returned');
-        return;
-      }
+      const { data: sign, error: signErr } = await supabase.auth.signUp({ email: whartonEmail.trim(), password });
+      if (signErr) { setAuthError(`Sign up failed: ${signErr.message}`); return; }
+      if (!sign?.user) { setAuthError('Sign up failed - no user returned'); return; }
 
-      // If email confirmations are ON, there might be no session yet.
       const hasSession = !!sign.session;
-
       if (hasSession) {
         const { error: profileErr } = await supabase
           .from('profiles')
@@ -348,98 +358,36 @@ export default function WTPInteractiveDiagram() {
             recovery_email: '',
           })
           .eq('id', sign.user.id);
+        if (profileErr) { console.error('Profile update error:', profileErr); setAuthError(`Profile update failed: ${profileErr.message}`); return; }
 
-        if (profileErr) {
-          console.error('Profile update error:', profileErr);
-          setAuthError(`Profile update failed: ${profileErr.message}`);
-          return;
-        }
-
-        setCurrentUser({
-          id: sign.user.id,
-          username: uname,
-          wharton_email: whartonEmail.trim(),
-          cohort,
-          phone_e164: phoneE164,
-          venmo_handle: venmoId,
-          tier: 'Limited',
-        });
+        setCurrentUser({ id: sign.user.id, username: uname, wharton_email: whartonEmail.trim(), cohort, phone_e164: phoneE164, venmo_handle: venmoId, tier: 'Limited' });
       } else {
-        // No session yet; the DB trigger already created a stub profile.
         setAuthError('Check your inbox to verify your email, then sign in to finish.');
       }
 
-      setPassword('');
-      setUsername('');
-      setPhoneDigits('');
-      setVenmo('');
-      setWhartonEmail('');
+      setPassword(''); setUsername(''); setPhoneDigits(''); setVenmo(''); setWhartonEmail('');
     } catch (err: any) {
       console.error('Signup error:', err);
       setAuthError(`Signup failed: ${err.message || 'Unknown error'}`);
     }
   };
 
-  /* -------- Login: email or username + password -------- */
+  /* -------- Login: email + password only -------- */
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setAuthError('');
 
-    let emailToUse = loginEmail.trim();
-
-    if (!emailToUse.includes('@') && isValidUsername(loginEmail)) {
-      const { data: profiles, error: lookupError } = await supabase
-        .from('profiles')
-        .select('wharton_email')
-        .eq('username', normalizeUsername(loginEmail))
-        .limit(1);
-
-      if (lookupError) {
-        setAuthError('Error looking up user. Please use your Wharton email address.');
-        return;
-      }
-      if (!profiles || profiles.length === 0) {
-        setAuthError('Username not found. Use your First Last or Wharton email.');
-        return;
-      }
-      emailToUse = profiles[0].wharton_email;
-    }
-
-    if (!emailToUse.includes('@')) {
-      setAuthError('Please enter your Wharton email address or a valid username.');
-      return;
-    }
+    const emailToUse = loginEmail.trim();
+    if (!emailToUse.includes('@')) { setAuthError('Please enter your Wharton email address.'); return; }
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: emailToUse,
-        password,
-      });
+      const { data, error } = await supabase.auth.signInWithPassword({ email: emailToUse, password });
+      if (error) { setAuthError(`Login failed: ${error.message}`); return; }
+      if (!data?.user) { setAuthError('Login failed - no user returned'); return; }
 
-      if (error) {
-        setAuthError(`Login failed: ${error.message}`);
-        return;
-      }
-      if (!data?.user) {
-        setAuthError('Login failed - no user returned');
-        return;
-      }
-
-      const { data: prof, error: profErr } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', data.user.id)
-        .maybeSingle();
-
-      if (profErr) {
-        console.error('Profile fetch error:', profErr);
-        setAuthError('Error fetching profile. Please contact support.');
-        return;
-      }
-      if (!prof) {
-        setAuthError('Profile not found. Please contact support.');
-        return;
-      }
+      const { data: prof, error: profErr } = await supabase.from('profiles').select('*').eq('id', data.user.id).maybeSingle();
+      if (profErr) { console.error('Profile fetch error:', profErr); setAuthError('Error fetching profile.'); return; }
+      if (!prof)   { setAuthError('Profile not found.'); return; }
 
       setCurrentUser({
         id: data.user.id,
@@ -451,8 +399,7 @@ export default function WTPInteractiveDiagram() {
         tier: 'Limited',
       });
 
-      setPassword('');
-      setLoginEmail('');
+      setPassword(''); setLoginEmail('');
     } catch (err: any) {
       console.error('Login error:', err);
       setAuthError(`Login failed: ${err.message || 'Unknown error'}`);
@@ -470,24 +417,15 @@ export default function WTPInteractiveDiagram() {
   };
 
   const postIntent = async () => {
-    if (!currentUser) {
-      alert('Please sign in first.');
-      return;
-    }
+    if (!currentUser) { alert('Please sign in first.'); return; }
 
     const limits = getTierLimits(currentUser.tier);
     const mine = postings.filter((p) => p.name === currentUser.username);
     const buyPosts = mine.filter((p) => p.role === 'buyer').length;
     const sellPosts = mine.filter((p) => p.role === 'seller').length;
 
-    if (role === 'buyer' && buyPosts >= limits.buy) {
-      alert(`Your ${currentUser.tier} tier allows only ${limits.buy} buy post(s). Delete old posts to make new ones.`);
-      return;
-    }
-    if (role === 'seller' && sellPosts >= limits.sell) {
-      alert(`Your ${currentUser.tier} tier allows only ${limits.sell} sell post(s). Delete old posts to make new ones.`);
-      return;
-    }
+    if (role === 'buyer' && buyPosts >= limits.buy) { alert(`Your ${currentUser.tier} tier allows only ${limits.buy} buy post(s). Delete old posts to make new ones.`); return; }
+    if (role === 'seller' && sellPosts >= limits.sell) { alert(`Your ${currentUser.tier} tier allows only ${limits.sell} sell post(s). Delete old posts to make new ones.`); return; }
 
     const row = {
       device_id: getDeviceId(),
@@ -505,22 +443,12 @@ export default function WTPInteractiveDiagram() {
     try {
       const { data, error } = await supabase
         .from('postings_public')
-        .upsert(row, {
-          onConflict: 'device_id,event_id,role',
-          ignoreDuplicates: false,
-        })
+        .upsert(row, { onConflict: 'device_id,event_id,role', ignoreDuplicates: false })
         .select()
         .single();
 
-      if (error) {
-        console.error('Post creation error:', error);
-        alert(`Post failed: ${error.message}. Please check your database schema and constraints.`);
-        return;
-      }
-      if (!data) {
-        alert('Post failed - no data returned');
-        return;
-      }
+      if (error) { console.error('Post creation error:', error); alert(`Post failed: ${error.message}`); return; }
+      if (!data) { alert('Post failed - no data returned'); return; }
 
       setPostings((prev) => {
         const rest = prev.filter((p) => p.id !== String(data.id));
@@ -550,12 +478,8 @@ export default function WTPInteractiveDiagram() {
   const deletePosting = async (id: string) => {
     try {
       const { error } = await supabase.from('postings_public').delete().eq('id', id);
-      if (error) {
-        console.error('Delete error:', error);
-        alert(`Delete failed: ${error.message}`);
-      } else {
-        setPostings((prev) => prev.filter((p) => p.id !== id));
-      }
+      if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
+      else { setPostings((prev) => prev.filter((p) => p.id !== id)); }
     } catch (err: any) {
       console.error('Delete error:', err);
       alert(`Delete failed: ${err.message || 'Unknown error'}`);
@@ -564,19 +488,26 @@ export default function WTPInteractiveDiagram() {
 
   const markTraded = (id: string) => {
     const posting = postings.find((p) => p.id === id);
-    if (posting) {
-      setTotalTradedTickets((prev) => prev + posting.tickets);
-      deletePosting(id);
-    }
+    if (posting) { setTotalTradedTickets((prev) => prev + posting.tickets); deletePosting(id); }
   };
 
-  /* -------- Chat (local only) -------- */
-  const addComment = () => {
-    if (!currentUser || !newComment.trim()) return;
-    setComments((prev) => [
-      ...prev,
-      { id: Math.random().toString(36), username: currentUser.username, message: newComment.trim(), timestamp: new Date() },
-    ]);
+  /* -------- Live chat (DB) -------- */
+  const addComment = async () => {
+    if (!currentUser) return;
+    const msg = (newComment || '').trim();
+    if (!msg) return;
+    if (msg.length > 250) { alert('Max 250 characters'); return; }
+
+    const { error } = await supabase.from('chat_messages').insert({
+      user_id: currentUser.id,
+      username: currentUser.username,
+      message: msg,
+    });
+    if (error) {
+      console.error('Chat insert error:', error);
+      alert(`Message failed: ${error.message}`);
+      return;
+    }
     setNewComment('');
   };
 
@@ -612,6 +543,54 @@ export default function WTPInteractiveDiagram() {
   const myMatches = getMatches();
   const myListings = currentUser ? postings.filter((p) => p.name === currentUser.username) : [];
 
+  /* -------- Market charts derived from live postings -------- */
+  const filtered = useMemo(() => postings.filter(p => p.eventId === eventId), [postings, eventId]);
+
+  const marketDistribution = useMemo(() => {
+    // Buckets that match your original labels
+    const buckets = ['50-60%', '60-70%', '70-80%', '80-90%', '90-100%', '100%'] as const;
+    const rangeFor = (pct: number): typeof buckets[number] | null => {
+      if (pct === 100) return '100%';
+      if (pct >= 50 && pct < 60) return '50-60%';
+      if (pct >= 60 && pct < 70) return '60-70%';
+      if (pct >= 70 && pct < 80) return '70-80%';
+      if (pct >= 80 && pct < 90) return '80-90%';
+      if (pct >= 90 && pct < 100) return '90-100%';
+      return null;
+    };
+    const acc = new Map<string, { seller: number; buyer: number }>();
+    buckets.forEach(b => acc.set(b, { seller: 0, buyer: 0 }));
+    for (const p of filtered) {
+      const b = rangeFor(p.percent);
+      if (!b) continue;
+      const slot = acc.get(b)!;
+      if (p.role === 'seller') slot.seller += 1;
+      else slot.buyer += 1;
+    }
+    // negative for sellers so bars go left
+    return buckets.map(b => ({ bucket: b, seller: -(acc.get(b)!.seller), buyer: acc.get(b)!.buyer }));
+  }, [filtered]);
+
+  const supplyDemand = useMemo(() => {
+    // Supply at price p: sellers with percent <= p
+    // Demand at price p: buyers with percent >= p
+    const sellers = filtered.filter(p => p.role === 'seller').map(p => p.percent).sort((a, b) => a - b);
+    const buyers  = filtered.filter(p => p.role === 'buyer').map(p => p.percent).sort((a, b) => a - b);
+    const points: { p: number; supply: number; demand: number }[] = [];
+    for (let p = 0; p <= 100; p += 5) {
+      const supply = sellers.filter(s => s <= p).length;
+      const demand = buyers.filter(b => b >= p).length;
+      points.push({ p, supply, demand });
+    }
+    return points;
+  }, [filtered]);
+
+  // crude clearing price = first p where supply >= demand
+  const clearing = useMemo(() => {
+    for (const pt of supplyDemand) { if (pt.supply >= pt.demand) return pt.p; }
+    return 0;
+  }, [supplyDemand]);
+
   /* -------- UI -------- */
   return (
     <div className="min-h-screen w-full bg-gray-50 text-gray-900">
@@ -631,6 +610,38 @@ export default function WTPInteractiveDiagram() {
           </div>
         </div>
 
+        {/* Tier dropdowns (brought back) */}
+        <Card className="mb-6 p-5">
+          <SectionTitle title="Membership Tiers" subtitle="What you get at each level" />
+          <div className="space-y-3">
+            {(Object.keys(TIER_INFO) as Tier[]).map(tier => {
+              const open = openTier === tier;
+              const info = TIER_INFO[tier];
+              return (
+                <div key={tier} className="rounded-xl border border-gray-200">
+                  <button
+                    type="button"
+                    onClick={() => setOpenTier(open ? null : tier)}
+                    className="flex w-full items-center justify-between px-4 py-3"
+                  >
+                    <div className="text-sm font-semibold">
+                      {tier} <span className="ml-2 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">{info.price}</span>
+                    </div>
+                    {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
+                  {open && (
+                    <div className="px-4 pb-4 text-sm text-gray-700">
+                      <ul className="list-inside list-disc space-y-1">
+                        {info.features.map((f, i) => <li key={i}>{f}</li>)}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
         {/* Auth */}
         {!currentUser ? (
           <Card className="mb-6 p-5">
@@ -639,22 +650,11 @@ export default function WTPInteractiveDiagram() {
               <form onSubmit={handleSignup} className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="md:col-span-2">
                   <Label>Username (First Last)</Label>
-                  <Input
-                    placeholder="Joe Wharton"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    required
-                  />
+                  <Input placeholder="Joe Wharton" value={username} onChange={(e) => setUsername(e.target.value)} required />
                 </div>
                 <div>
                   <Label>Password</Label>
-                  <Input 
-                    type="password" 
-                    placeholder="At least 8 characters" 
-                    value={password} 
-                    onChange={(e) => setPassword(e.target.value)} 
-                    required 
-                  />
+                  <Input type="password" placeholder="At least 8 characters" value={password} onChange={(e) => setPassword(e.target.value)} required />
                 </div>
                 <div>
                   <Label>WG Cohort</Label>
@@ -682,38 +682,23 @@ export default function WTPInteractiveDiagram() {
                 </div>
                 <div className="md:col-span-2 flex items-center gap-2">
                   <Button type="submit">Create account</Button>
-                  <GhostButton type="button" onClick={() => setAuthMode('login')}>
-                    Have an account? Sign in
-                  </GhostButton>
+                  <GhostButton type="button" onClick={() => setAuthMode('login')}>Have an account? Sign in</GhostButton>
                   {authError && <span className="text-sm text-red-600">{authError}</span>}
                 </div>
               </form>
             ) : (
               <form onSubmit={handleLogin} className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="md:col-span-2">
-                  <Label>Username or Email</Label>
-                  <Input
-                    placeholder="Joe Wharton or you@wharton.upenn.edu"
-                    value={loginEmail}
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    required
-                  />
+                  <Label>School Email</Label>
+                  <Input placeholder="you@wharton.upenn.edu" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} required />
                 </div>
                 <div className="md:col-span-2">
                   <Label>Password</Label>
-                  <Input 
-                    type="password" 
-                    placeholder="Your password" 
-                    value={password} 
-                    onChange={(e) => setPassword(e.target.value)} 
-                    required 
-                  />
+                  <Input type="password" placeholder="Your password" value={password} onChange={(e) => setPassword(e.target.value)} required />
                 </div>
                 <div className="md:col-span-2 flex items-center gap-2">
                   <Button type="submit">Sign in</Button>
-                  <GhostButton type="button" onClick={() => setAuthMode('signup')}>
-                    New here? Create account
-                  </GhostButton>
+                  <GhostButton type="button" onClick={() => setAuthMode('signup')}>New here? Create account</GhostButton>
                   {authError && <span className="text-sm text-red-600">{authError}</span>}
                 </div>
               </form>
@@ -728,12 +713,7 @@ export default function WTPInteractiveDiagram() {
               </span>
             </div>
             <div className="flex gap-2">
-              <GhostButton
-                onClick={async () => {
-                  await supabase.auth.signOut();
-                  setCurrentUser(null);
-                }}
-              >
+              <GhostButton onClick={async () => { await supabase.auth.signOut(); setCurrentUser(null); }}>
                 Sign out
               </GhostButton>
             </div>
@@ -755,11 +735,7 @@ export default function WTPInteractiveDiagram() {
                   <Label>Phone</Label>
                   <div className="flex items-center">
                     <Input value={currentUser.phone_e164} readOnly className="flex-1" />
-                    <button
-                      onClick={() => navigator.clipboard?.writeText(currentUser.phone_e164)}
-                      className="ml-2 rounded bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200"
-                      type="button"
-                    >
+                    <button onClick={() => navigator.clipboard?.writeText(currentUser.phone_e164)} className="ml-2 rounded bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200" type="button">
                       Copy
                     </button>
                   </div>
@@ -767,14 +743,8 @@ export default function WTPInteractiveDiagram() {
                 <div>
                   <Label>Role</Label>
                   <div className="mt-1 flex items-center gap-4 text-sm">
-                    <label className="flex items-center gap-1">
-                      <input type="radio" checked={role === 'buyer'} onChange={() => setRole('buyer')} />
-                      Buyer
-                    </label>
-                    <label className="flex items-center gap-1">
-                      <input type="radio" checked={role === 'seller'} onChange={() => setRole('seller')} />
-                      Seller
-                    </label>
+                    <label className="flex items-center gap-1"><input type="radio" checked={role === 'buyer'} onChange={() => setRole('buyer')} />Buyer</label>
+                    <label className="flex items-center gap-1"><input type="radio" checked={role === 'seller'} onChange={() => setRole('seller')} />Seller</label>
                   </div>
                 </div>
                 <div>
@@ -796,9 +766,7 @@ export default function WTPInteractiveDiagram() {
                       style={{ background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${percent}%, #e5e7eb ${percent}%, #e5e7eb 100%)` }}
                     />
                     <div className="mt-1 flex justify-between text-xs text-gray-500">
-                      <span>0%</span>
-                      <span className="font-semibold text-indigo-600">{percent}%</span>
-                      <span>100%</span>
+                      <span>0%</span><span className="font-semibold text-indigo-600">{percent}%</span><span>100%</span>
                     </div>
                   </div>
                 </div>
@@ -839,16 +807,8 @@ export default function WTPInteractiveDiagram() {
                               }} />
                             </div>
                             <div className="grid grid-cols-2 gap-2 text-xs text-gray-700">
-                              <div>
-                                <div className="font-semibold">Seller</div>
-                                <div>Name: {seller.name}</div>
-                                <div className="flex items-center gap-1">Phone: {seller.phone}</div>
-                              </div>
-                              <div>
-                                <div className="font-semibold">Buyer</div>
-                                <div>Name: {buyer.name}</div>
-                                <div className="flex items-center gap-1">Phone: {buyer.phone}</div>
-                              </div>
+                              <div><div className="font-semibold">Seller</div><div>Name: {seller.name}</div><div className="flex items-center gap-1">Phone: {seller.phone}</div></div>
+                              <div><div className="font-semibold">Buyer</div><div>Name: {buyer.name}</div><div className="flex items-center gap-1">Phone: {buyer.phone}</div></div>
                             </div>
                             <div className="mt-1 text-right text-xs text-gray-500">@ {toMoney((agreedPct / 100) * eventPrice)}</div>
                           </div>
@@ -863,24 +823,13 @@ export default function WTPInteractiveDiagram() {
             )}
           </Card>
 
-          {/* MIDDLE: Charts */}
+          {/* MIDDLE: Charts (now live) */}
           <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
             <Card className="p-5">
-              <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} - Left bars = sellers (purple), right bars = buyers (green)`} />
+              <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} — left bars = sellers, right bars = buyers`} />
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
-                    data={[
-                      { bucket: '50-60%', seller: -Math.floor(Math.random() * 5), buyer: Math.floor(Math.random() * 3) },
-                      { bucket: '60-70%', seller: -Math.floor(Math.random() * 8), buyer: Math.floor(Math.random() * 5) },
-                      { bucket: '70-80%', seller: -Math.floor(Math.random() * 12), buyer: Math.floor(Math.random() * 8) },
-                      { bucket: '80-90%', seller: -Math.floor(Math.random() * 10), buyer: Math.floor(Math.random() * 12) },
-                      { bucket: '90-100%', seller: -Math.floor(Math.random() * 6), buyer: Math.floor(Math.random() * 15) },
-                      { bucket: '100%',   seller: -Math.floor(Math.random() * 4), buyer: Math.floor(Math.random() * 10) },
-                    ]}
-                    layout="vertical"
-                    margin={{ top: 10, right: 20, left: 20, bottom: 0 }}
-                  >
+                  <BarChart data={marketDistribution} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis type="number" domain={[-20, 20]} tickFormatter={(v) => Math.abs(Number(v)).toString()} />
                     <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
@@ -891,33 +840,24 @@ export default function WTPInteractiveDiagram() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
+              {filtered.length === 0 && <div className="mt-2 text-xs text-gray-500">No postings yet for this event.</div>}
             </Card>
 
             <Card className="p-5">
-              <SectionTitle title="Supply vs Demand Curves" subtitle="Market clearing price and volume analysis" />
+              <SectionTitle title="Supply vs Demand" subtitle="Calculated from current postings" />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                 <div className="lg:col-span-2">
                   <div className="h-72">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={Array.from({ length: 21 }, (_, i) => ({
-                          p: i * 5,
-                          supply: Math.max(0, 15 - i * 0.8 + Math.random() * 3),
-                          demand: Math.max(0, i * 0.6 + Math.random() * 2),
-                        }))}
-                        margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
-                      >
+                      <LineChart data={supplyDemand} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" />
                         <XAxis dataKey="p" tickFormatter={(v) => `${v}%`} />
                         <YAxis allowDecimals={false} />
-                        <Tooltip
-                          labelFormatter={(label) => `Price: ${label}%`}
-                          formatter={(value, name) => [Math.round(Number(value)), name === 'supply' ? 'Supply (sellers)' : 'Demand (buyers)']}
-                        />
+                        <Tooltip labelFormatter={(label) => `Price: ${label}%`} />
                         <Legend />
-                        <ReferenceLine x={75} stroke="#EF4444" strokeDasharray="5 3" label="p* = 75%" />
-                        <Line type="monotone" dataKey="supply" name="Supply" stroke="#6366F1" dot={false} />
-                        <Line type="monotone" dataKey="demand" name="Demand" stroke="#10B981" dot={false} />
+                        <ReferenceLine x={clearing} stroke="#EF4444" strokeDasharray="5 3" label={`p* = ${clearing}%`} />
+                        <Line type="monotone" dataKey="supply" name="Supply (sellers ≤ p)" stroke="#6366F1" dot={false} />
+                        <Line type="monotone" dataKey="demand" name="Demand (buyers ≥ p)" stroke="#10B981" dot={false} />
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
@@ -925,49 +865,49 @@ export default function WTPInteractiveDiagram() {
                 <div className="grid content-start gap-3 lg:col-span-1">
                   <Card className="p-4">
                     <div className="text-sm text-gray-500">Clearing Price</div>
-                    <div className="text-2xl font-bold">75%</div>
-                    <div className="text-sm text-gray-600">≈ {toMoney(eventPrice * 0.75)}</div>
+                    <div className="text-2xl font-bold">{clearing}%</div>
+                    <div className="text-sm text-gray-600">≈ {toMoney(eventPrice * (clearing / 100))}</div>
                   </Card>
                   <Card className="p-4">
-                    <div className="text-sm text-gray-500">Matched Trades</div>
-                    <div className="text-2xl font-bold">8</div>
-                    <div className="text-xs text-gray-500">at clearing price</div>
+                    <div className="text-sm text-gray-500">Active Buyers</div>
+                    <div className="text-2xl font-bold">{filtered.filter(p => p.role === 'buyer').length}</div>
                   </Card>
                   <Card className="p-4">
-                    <div className="text-sm text-gray-500">Spread</div>
-                    <div className="text-xl font-semibold">3.2%</div>
-                    <div className="text-sm text-gray-600">≈ {toMoney(eventPrice * 0.032)}</div>
+                    <div className="text-sm text-gray-500">Active Sellers</div>
+                    <div className="text-2xl font-bold">{filtered.filter(p => p.role === 'seller').length}</div>
                   </Card>
                 </div>
               </div>
             </Card>
           </div>
 
-          {/* RIGHT: Chat */}
+          {/* RIGHT: Chat (live) */}
           <Card className="p-5 lg:col-span-1">
-            <SectionTitle title="Community Chat" subtitle="Public discussion forum" />
+            <SectionTitle title="Community Chat" subtitle="Messages are public to signed-in users (max 250 chars)" />
             <div className="space-y-4">
               <div className="max-h-64 space-y-3 overflow-y-auto rounded-lg bg-gray-50 p-3">
-                {comments.map((c) => (
+                {chat.map((c) => (
                   <div key={c.id} className="text-sm">
                     <div className="font-semibold text-indigo-600">{c.username}</div>
-                    <div className="text-gray-700">{c.message}</div>
-                    <div className="text-xs text-gray-500">{c.timestamp.toLocaleTimeString()}</div>
+                    <div className="text-gray-700 break-words">{c.message}</div>
+                    <div className="text-xs text-gray-500">{new Date(c.created_at).toLocaleTimeString()}</div>
                   </div>
                 ))}
+                {chat.length === 0 && <div className="text-xs text-gray-500">No messages yet.</div>}
               </div>
               {currentUser && (
                 <div className="flex gap-2">
                   <Input
-                    placeholder="Type your message..."
+                    placeholder="Type your message (max 250 chars)..."
                     value={newComment}
+                    maxLength={250}
                     onChange={(e) => setNewComment(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') addComment(); }}
                     className="flex-1"
                   />
-                    <Button onClick={addComment} type="button">
-                      <MessageCircle size={16} />
-                    </Button>
+                  <Button onClick={addComment} type="button" disabled={!newComment.trim()}>
+                    <MessageCircle size={16} />
+                  </Button>
                 </div>
               )}
             </div>
