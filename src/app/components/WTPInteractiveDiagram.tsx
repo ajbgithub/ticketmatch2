@@ -2,112 +2,55 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+  Bar, BarChart, CartesianGrid, Legend, Line, LineChart,
+  ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import { X, MessageCircle, Trophy } from 'lucide-react';
+import { supabase } from '@/lib/supabaseClient';
 
-/* ===========================================================
-   UI Components
-   =========================================================== */
+/* =========================
+   Simple UI helpers
+   ========================= */
 type DivProps = React.HTMLAttributes<HTMLDivElement>;
 const Card: React.FC<DivProps & { className?: string }> = ({ className = '', children, ...rest }) => (
-  <div className={`rounded-2xl shadow-sm border border-gray-200 bg-white ${className}`} {...rest}>
-    {children}
-  </div>
+  <div className={`rounded-2xl shadow-sm border border-gray-200 bg-white ${className}`} {...rest}>{children}</div>
 );
-
 const SectionTitle: React.FC<{ title: string; subtitle?: string }> = ({ title, subtitle }) => (
   <div className="mb-4">
     <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
     {subtitle ? <p className="text-sm text-gray-500 leading-snug">{subtitle}</p> : null}
   </div>
 );
-
 const Label: React.FC<React.LabelHTMLAttributes<HTMLLabelElement>> = ({ className = '', children, ...rest }) => (
-  <label className={`block text-sm font-medium text-gray-700 ${className}`} {...rest}>
-    {children}
-  </label>
+  <label className={`block text-sm font-medium text-gray-700 ${className}`} {...rest}>{children}</label>
 );
-
 const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = '', ...rest }) => (
-  <input
-    className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${className}`}
-    {...rest}
-  />
+  <input className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${className}`} {...rest} />
 );
-
 const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ className = '', children, ...rest }) => (
-  <select
-    className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${className}`}
-    {...rest}
-  >
-    {children}
-  </select>
+  <select className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${className}`} {...rest}>{children}</select>
 );
-
-const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { className?: string }> = ({
-  className = '',
-  children,
-  ...rest
-}) => (
-  <button
-    className={`rounded-xl px-3 py-2 text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-500 active:bg-indigo-700 transition ${className}`}
-    {...rest}
-  >
-    {children}
-  </button>
+const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { className?: string }> = ({ className = '', children, ...rest }) => (
+  <button className={`rounded-xl px-3 py-2 text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-500 active:bg-indigo-700 transition ${className}`} {...rest}>{children}</button>
 );
-
-const GhostButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { className?: string }> = ({
-  className = '',
-  children,
-  ...rest
-}) => (
-  <button
-    className={`rounded-xl px-3 py-2 text-sm font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50 transition ${className}`}
-    {...rest}
-  >
-    {children}
-  </button>
+const GhostButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { className?: string }> = ({ className = '', children, ...rest }) => (
+  <button className={`rounded-xl px-3 py-2 text-sm font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50 transition ${className}`} {...rest}>{children}</button>
 );
-
 const TradedButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
-  <button
-    onClick={onClick}
-    className="rounded-lg px-2 py-1 text-xs font-semibold bg-green-600 text-white hover:bg-green-500 transition"
-  >
-    Traded
-  </button>
+  <button onClick={onClick} className="rounded-lg px-2 py-1 text-xs font-semibold bg-green-600 text-white hover:bg-green-500 transition">Traded</button>
 );
-
 const DeleteButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
   <button onClick={onClick} className="rounded-lg p-1 text-red-600 hover:bg-red-50 transition" aria-label="Delete">
     <X size={16} />
   </button>
 );
-
 const WeTradedButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
-  <button
-    onClick={onClick}
-    className="rounded-lg px-3 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-500 transition"
-  >
-    We Traded!
-  </button>
+  <button onClick={onClick} className="rounded-lg px-3 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-500 transition">We Traded!</button>
 );
 
-/* ===========================================================
-   Types and Constants
-   =========================================================== */
+/* =========================
+   Types & constants
+   ========================= */
 type Role = 'buyer' | 'seller';
 type Tier = 'Limited' | 'Basic' | 'Pro' | 'Max';
 
@@ -123,14 +66,14 @@ interface Profile {
 }
 
 interface Posting {
-  id: string;
-  userId: string;
-  eventId: string;
-  role: Role;
-  percent: number;
-  tickets: number;
-  name: string;
-  phone: string;
+  id: string;          // DB id as string
+  userId: string;      // device_id
+  eventId: string;     // event_id
+  role: Role;          // 'buyer' | 'seller'
+  percent: number;     // 0..100
+  tickets: number;     // always 1
+  name: string;        // username
+  phone: string;       // phone_e164
   cohort?: string;
   venmo?: string;
   email?: string;
@@ -142,7 +85,6 @@ interface Comment {
   message: string;
   timestamp: Date;
 }
-
 interface Trade {
   id: string;
   buyerName: string;
@@ -158,190 +100,49 @@ const EVENTS = [
   { id: 'wp', label: 'White Party - Member Price $50', price: 50 },
 ] as const;
 
-const TIER_INFO: Record<
-  Tier,
-  {
-    price: string;
-    features: string[];
-  }
-> = {
-  Limited: {
-    price: '$0/mo',
-    features: ['Buy 1 and sell 1 at a time', 'Delete old posts to make new posts', 'See direct matches only', 'See 1-3 matches'],
-  },
-  Basic: {
-    price: '$5/mo',
-    features: ['Buy 2 and sell 2 at a time', 'Delete old posts to make new posts', 'See direct and closest matches within 10%'],
-  },
-  Pro: {
-    price: '$10/mo',
-    features: ['Buy 5 and sell 5 at a time', 'See direct matches and matches within 25%'],
-  },
-  Max: {
-    price: '$15/mo',
-    features: ['SMS instant alerts', 'Unlimited trades', 'Match with entire market'],
-  },
+const TIER_INFO: Record<Tier, { price: string; features: string[] }> = {
+  Limited: { price: '$0/mo', features: ['Buy 1 and sell 1 at a time', 'Delete old posts to make new posts', 'See direct matches only', 'See 1-3 matches'] },
+  Basic:   { price: '$5/mo', features: ['Buy 2 and sell 2 at a time', 'Delete old posts to make new posts', 'See direct and closest matches within 10%'] },
+  Pro:     { price: '$10/mo', features: ['Buy 5 and sell 5 at a time', 'See direct matches and matches within 25%'] },
+  Max:     { price: '$15/mo', features: ['SMS instant alerts', 'Unlimited trades', 'Match with entire market'] },
 };
 
-const AREA_CODES: string[] = [
-  '+1',
-  '+44',
-  '+61',
-  '+81',
-  '+82',
-  '+91',
-  '+33',
-  '+49',
-  '+39',
-  '+34',
-  '+86',
-  '+971',
-  '+65',
-  '+852',
-  '+353',
-];
+const AREA_CODES: string[] = ['+1', '+44', '+61', '+81', '+82', '+91', '+33', '+49', '+39', '+34', '+86', '+971', '+65', '+852', '+353'];
 
-/* ===========================================================
-   Utility Functions
-   =========================================================== */
+/* =========================
+   Utils
+   ========================= */
 const clamp01 = (x: number): number => Math.min(1, Math.max(0, x));
 const toMoney = (v: number): string => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
 const onlyDigits = (s: string): string => (s || '').replace(/\D+/g, '');
-
 const getDeviceId = (): string => {
   if (typeof window === 'undefined') return 'server';
   const k = 'ticketmatch_device_id';
   let id = localStorage?.getItem(k);
-  if (!id) {
-    id = Math.random().toString(36).slice(2);
-    localStorage?.setItem(k, id);
-  }
+  if (!id) { id = Math.random().toString(36).slice(2); localStorage?.setItem(k, id); }
   return id;
 };
-
-function isValidUsername(u: string): boolean {
-  return /^[A-Za-z]+ [A-Za-z]+$/.test((u || '').trim());
-}
-
-function normalizeUsername(u: string): string {
-  return (u || '').trim().replace(/\s+/, ' ');
-}
-
-function isWhartonEmail(e: string): boolean {
-  return /@wharton\.upenn\.edu$/i.test((e || '').trim());
-}
-
-function buildE164(code: string, digits: string): string {
+const isValidUsername = (u: string): boolean => /^[A-Za-z]+ [A-Za-z]+$/.test((u || '').trim());
+const normalizeUsername = (u: string): string => (u || '').trim().replace(/\s+/, ' ');
+const isWhartonEmail = (e: string): boolean => /@wharton\.upenn\.edu$/i.test((e || '').trim());
+const buildE164 = (code: string, digits: string): string => {
   const d = onlyDigits(digits);
   const c = code.startsWith('+') ? code : `+${onlyDigits(code)}`;
   return `${c}${d}`;
-}
-
-function isValidE164(e164: string): boolean {
-  return /^\+\d{6,16}$/.test((e164 || '').trim());
-}
-
-function normalizeVenmo(h: string): string {
-  const v = (h || '').trim();
-  return v.startsWith('@') ? v.slice(1) : v;
-}
-
-function isValidVenmo(h: string): boolean {
-  return /^[A-Za-z0-9_]{3,30}$/.test(normalizeVenmo(h));
-}
-
-/* ===========================================================
-   Seeded Test Data
-   =========================================================== */
-const generateTestPostings = (): Posting[] => {
-  const testData: Posting[] = [];
-  const names = [
-    'Alice Chen',
-    'Bob Smith',
-    'Carol Davis',
-    'David Brown',
-    'Emma Wilson',
-    'Frank Miller',
-    'Grace Taylor',
-    'Henry Lee',
-    'Ivy Johnson',
-    'Jack Wilson',
-    'Kate Davis',
-    'Liam Brown',
-  ];
-
-  EVENTS.forEach((event) => {
-    names.forEach((name, idx) => {
-      if (Math.random() > 0.3) {
-        testData.push({
-          id: `test-${event.id}-${idx}`,
-          userId: `device-${idx}`,
-          eventId: event.id,
-          role: Math.random() > 0.5 ? 'buyer' : 'seller',
-          percent: Math.floor(Math.random() * 50) + 50,
-          tickets: 1,
-          name,
-          phone: `+1555${String(Math.floor(Math.random() * 1_000_000)).padStart(7, '0')}`,
-          cohort: Math.random() > 0.5 ? 'WG26' : 'WG27',
-          venmo: `${name.toLowerCase().replace(' ', '')}`,
-          email: `${name.toLowerCase().replace(' ', '.')}@wharton.upenn.edu`,
-        });
-      }
-    });
-  });
-
-  testData.push({
-    id: 'joe-seller-rb',
-    userId: 'joe-device',
-    eventId: 'rb',
-    role: 'seller',
-    percent: 85,
-    tickets: 1,
-    name: 'Joe Wharton',
-    phone: '+15551234567',
-    cohort: 'WG26',
-    venmo: 'joewharton',
-    email: 'joe@wharton.upenn.edu',
-  });
-
-  testData.push({
-    id: 'andrew-buyer-rb',
-    userId: 'andrew-device',
-    eventId: 'rb',
-    role: 'buyer',
-    percent: 90,
-    tickets: 1,
-    name: 'Andrew Bilden',
-    phone: '+15559876543',
-    cohort: 'WG27',
-    venmo: 'andrewb',
-    email: 'andrew.bilden@wharton.upenn.edu',
-  });
-
-  testData.push({
-    id: 'seller-match-1',
-    userId: 'seller-1',
-    eventId: 'wp',
-    role: 'seller',
-    percent: 75,
-    tickets: 1,
-    name: 'Sarah Johnson',
-    phone: '+15555551111',
-    cohort: 'WG26',
-    venmo: 'sarahj',
-    email: 'sarah.johnson@wharton.upenn.edu',
-  });
-
-  return testData;
 };
+const isValidE164 = (e164: string): boolean => /^\+\d{6,16}$/.test((e164 || '').trim());
+const normalizeVenmo = (h: string): string => (h || '').trim().replace(/^@/, '');
+const isValidVenmo = (h: string): boolean => /^[A-Za-z0-9_]{3,30}$/.test(normalizeVenmo(h));
 
-/* ===========================================================
-   Main Component
-   =========================================================== */
+/* =========================
+   Component
+   ========================= */
 export default function WTPInteractiveDiagram() {
-  // State
-  const [postings, setPostings] = useState<Posting[]>(generateTestPostings());
+  // DB-backed state
+  const [postings, setPostings] = useState<Posting[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
+
+  // UI state
   const [authMode, setAuthMode] = useState<'signup' | 'login'>('signup');
   const [authError, setAuthError] = useState<string>('');
   const [showTierDropdown, setShowTierDropdown] = useState<Tier | null>(null);
@@ -355,6 +156,7 @@ export default function WTPInteractiveDiagram() {
 
   // Auth fields
   const [username, setUsername] = useState<string>('');
+  const [loginEmail, setLoginEmail] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [cohort, setCohort] = useState<'WG26' | 'WG27'>('WG26');
   const [areaCode, setAreaCode] = useState<string>(AREA_CODES[0]);
@@ -370,19 +172,130 @@ export default function WTPInteractiveDiagram() {
   const currentEvent = useMemo(() => EVENTS.find((e) => e.id === eventId), [eventId]);
   const eventPrice = currentEvent?.price ?? 0;
 
-  // Init: ensure logged-out for demo
+  /* -------- Load session, profile, postings; wire realtime -------- */
   useEffect(() => {
-    setCurrentUser(null);
+    let sub: ReturnType<typeof supabase.channel> | null = null;
+
+    (async () => {
+      const { data: s } = await supabase.auth.getSession();
+      const userId = s?.session?.user?.id;
+
+      if (userId) {
+        const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+        if (prof) {
+          setCurrentUser({
+            id: userId,
+            username: prof.username,
+            wharton_email: prof.wharton_email,
+            cohort: prof.cohort,
+            phone_e164: prof.phone_e164,
+            venmo_handle: prof.venmo_handle,
+            tier: 'Limited',
+          });
+        }
+      }
+
+      await refreshPostings();
+
+      sub = supabase
+        .channel('postings_public_stream')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'postings_public' },
+          (payload) => {
+            if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+              const r: any = payload.new;
+              setPostings((prev) => {
+                const rest = prev.filter((p) => p.id !== String(r.id));
+                return [
+                  ...rest,
+                  {
+                    id: String(r.id),
+                    userId: r.device_id,
+                    eventId: r.event_id,
+                    role: r.role,
+                    percent: r.percent,
+                    tickets: r.tickets,
+                    name: r.username,
+                    phone: r.phone_e164,
+                    cohort: r.cohort ?? undefined,
+                    venmo: r.venmo_handle ?? undefined,
+                    email: r.email ?? r.email_address ?? undefined,
+                  },
+                ];
+              });
+            } else if (payload.eventType === 'DELETE') {
+              const r: any = payload.old;
+              setPostings((prev) => prev.filter((p) => p.id !== String(r.id)));
+            }
+          }
+        )
+        .subscribe();
+    })();
+
+    const { data: authSub } = supabase.auth.onAuthStateChange(async (evt, sess) => {
+      if (evt === 'SIGNED_IN' && sess?.user) {
+        const { data: prof } = await supabase.from('profiles').select('*').eq('id', sess.user.id).maybeSingle();
+        if (prof) {
+          setCurrentUser({
+            id: sess.user.id,
+            username: prof.username,
+            wharton_email: prof.wharton_email,
+            cohort: prof.cohort,
+            phone_e164: prof.phone_e164,
+            venmo_handle: prof.venmo_handle,
+            tier: 'Limited',
+          });
+        }
+      }
+      if (evt === 'SIGNED_OUT') {
+        setCurrentUser(null);
+      }
+    });
+
+    return () => {
+      authSub.subscription.unsubscribe();
+      if (sub) supabase.removeChannel(sub);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auth handlers
-  const handleSignup = (e: React.FormEvent<HTMLFormElement>) => {
+  const refreshPostings = async () => {
+    const { data, error } = await supabase
+      .from('postings_public')
+      .select('*')
+      .order('updated_at', { ascending: false });
+    if (error) {
+      console.error('Error fetching postings:', error);
+      return;
+    }
+    if (data) {
+      setPostings(
+        data.map((r: any) => ({
+          id: String(r.id),
+          userId: r.device_id,
+          eventId: r.event_id,
+          role: r.role,
+          percent: r.percent,
+          tickets: r.tickets,
+          name: r.username,
+          phone: r.phone_e164,
+          cohort: r.cohort ?? undefined,
+          venmo: r.venmo_handle ?? undefined,
+          email: r.email ?? r.email_address ?? undefined,
+        }))
+      );
+    }
+  };
+
+  /* -------- Signup: auth + profile update (trigger pre-creates) -------- */
+  const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setAuthError('');
 
     const uname = normalizeUsername(username);
     if (!isValidUsername(uname)) {
-      setAuthError('Username must be First Last.');
+      setAuthError('Username must be First Last (e.g., "John Smith").');
       return;
     }
     if (password.length < 8) {
@@ -402,115 +315,170 @@ export default function WTPInteractiveDiagram() {
 
     const venmoId = normalizeVenmo(venmo);
     if (!isValidVenmo(venmoId)) {
-      setAuthError('Enter a valid Venmo handle.');
+      setAuthError('Enter a valid Venmo handle (3-30 characters, letters/numbers/underscore only).');
       return;
     }
 
-    setCurrentUser({
-      id: Math.random().toString(36),
-      username: uname,
-      wharton_email: whartonEmail.trim(),
-      cohort,
-      phone_e164: phoneE164,
-      venmo_handle: venmoId,
-      tier: 'Limited',
-    });
-    setPassword('');
+    try {
+      const { data: sign, error: signErr } = await supabase.auth.signUp({
+        email: whartonEmail.trim(),
+        password,
+      });
+      if (signErr) {
+        setAuthError(`Sign up failed: ${signErr.message}`);
+        return;
+      }
+      if (!sign?.user) {
+        setAuthError('Sign up failed - no user returned');
+        return;
+      }
+
+      // If email confirmations are ON, there might be no session yet.
+      const hasSession = !!sign.session;
+
+      if (hasSession) {
+        const { error: profileErr } = await supabase
+          .from('profiles')
+          .update({
+            username: uname,
+            cohort,
+            phone_e164: phoneE164,
+            venmo_handle: venmoId,
+            wharton_email: whartonEmail.trim(),
+            recovery_email: '',
+          })
+          .eq('id', sign.user.id);
+
+        if (profileErr) {
+          console.error('Profile update error:', profileErr);
+          setAuthError(`Profile update failed: ${profileErr.message}`);
+          return;
+        }
+
+        setCurrentUser({
+          id: sign.user.id,
+          username: uname,
+          wharton_email: whartonEmail.trim(),
+          cohort,
+          phone_e164: phoneE164,
+          venmo_handle: venmoId,
+          tier: 'Limited',
+        });
+      } else {
+        // No session yet; the DB trigger already created a stub profile.
+        setAuthError('Check your inbox to verify your email, then sign in to finish.');
+      }
+
+      setPassword('');
+      setUsername('');
+      setPhoneDigits('');
+      setVenmo('');
+      setWhartonEmail('');
+    } catch (err: any) {
+      console.error('Signup error:', err);
+      setAuthError(`Signup failed: ${err.message || 'Unknown error'}`);
+    }
   };
 
-  const handleLogin = (e: React.FormEvent<HTMLFormElement>) => {
+  /* -------- Login: email or username + password -------- */
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setAuthError('');
 
-    if (username === 'joe@wharton.upenn.edu' && password === 'wharton2025') {
-      setCurrentUser({
-        id: 'joe-wharton-id',
-        username: 'Joe Wharton',
-        wharton_email: 'joe@wharton.upenn.edu',
-        cohort: 'WG26',
-        phone_e164: '+15551234567',
-        venmo_handle: 'joewharton',
-        tier: 'Limited',
-      });
-      setPassword('');
-      setUsername('');
-      return;
+    let emailToUse = loginEmail.trim();
+
+    if (!emailToUse.includes('@') && isValidUsername(loginEmail)) {
+      const { data: profiles, error: lookupError } = await supabase
+        .from('profiles')
+        .select('wharton_email')
+        .eq('username', normalizeUsername(loginEmail))
+        .limit(1);
+
+      if (lookupError) {
+        setAuthError('Error looking up user. Please use your Wharton email address.');
+        return;
+      }
+      if (!profiles || profiles.length === 0) {
+        setAuthError('Username not found. Use your First Last or Wharton email.');
+        return;
+      }
+      emailToUse = profiles[0].wharton_email;
     }
-    if (username === 'Joe Wharton' && password === 'wharton2025') {
-      setCurrentUser({
-        id: 'joe-wharton-id',
-        username: 'Joe Wharton',
-        wharton_email: 'joe@wharton.upenn.edu',
-        cohort: 'WG26',
-        phone_e164: '+15551234567',
-        venmo_handle: 'joewharton',
-        tier: 'Limited',
-      });
-      setPassword('');
-      setUsername('');
-      return;
-    }
-    if (username === 'andrew.bilden@wharton.upenn.edu' && password === 'andrew2025') {
-      setCurrentUser({
-        id: 'andrew-bilden-id',
-        username: 'Andrew Bilden',
-        wharton_email: 'andrew.bilden@wharton.upenn.edu',
-        cohort: 'WG27',
-        phone_e164: '+15559876543',
-        venmo_handle: 'andrewb',
-        tier: 'Basic',
-      });
-      setPassword('');
-      setUsername('');
-      return;
-    }
-    if (username === 'Andrew Bilden' && password === 'andrew2025') {
-      setCurrentUser({
-        id: 'andrew-bilden-id',
-        username: 'Andrew Bilden',
-        wharton_email: 'andrew.bilden@wharton.upenn.edu',
-        cohort: 'WG27',
-        phone_e164: '+15559876543',
-        venmo_handle: 'andrewb',
-        tier: 'Basic',
-      });
-      setPassword('');
-      setUsername('');
+
+    if (!emailToUse.includes('@')) {
+      setAuthError('Please enter your Wharton email address or a valid username.');
       return;
     }
 
-    setAuthError(`Invalid credentials. Available test accounts:
-• joe@wharton.upenn.edu / wharton2025
-• andrew.bilden@wharton.upenn.edu / andrew2025
-• Joe Wharton / wharton2025
-• Andrew Bilden / andrew2025`);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: emailToUse,
+        password,
+      });
+
+      if (error) {
+        setAuthError(`Login failed: ${error.message}`);
+        return;
+      }
+      if (!data?.user) {
+        setAuthError('Login failed - no user returned');
+        return;
+      }
+
+      const { data: prof, error: profErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', data.user.id)
+        .maybeSingle();
+
+      if (profErr) {
+        console.error('Profile fetch error:', profErr);
+        setAuthError('Error fetching profile. Please contact support.');
+        return;
+      }
+      if (!prof) {
+        setAuthError('Profile not found. Please contact support.');
+        return;
+      }
+
+      setCurrentUser({
+        id: data.user.id,
+        username: prof.username,
+        wharton_email: prof.wharton_email,
+        cohort: prof.cohort,
+        phone_e164: prof.phone_e164,
+        venmo_handle: prof.venmo_handle,
+        tier: 'Limited',
+      });
+
+      setPassword('');
+      setLoginEmail('');
+    } catch (err: any) {
+      console.error('Login error:', err);
+      setAuthError(`Login failed: ${err.message || 'Unknown error'}`);
+    }
   };
 
-  // Helpers
+  /* -------- Posting helpers -------- */
   const getTierLimits = (tier: Tier): { buy: number; sell: number } => {
     switch (tier) {
-      case 'Basic':
-        return { buy: 2, sell: 2 };
-      case 'Pro':
-        return { buy: 5, sell: 5 };
-      case 'Max':
-        return { buy: Number.POSITIVE_INFINITY, sell: Number.POSITIVE_INFINITY };
-      default:
-        return { buy: 1, sell: 1 };
+      case 'Basic': return { buy: 2, sell: 2 };
+      case 'Pro':   return { buy: 5, sell: 5 };
+      case 'Max':   return { buy: Number.POSITIVE_INFINITY, sell: Number.POSITIVE_INFINITY };
+      default:      return { buy: 1, sell: 1 };
     }
   };
 
-  // Posting handlers
-  const postIntent = () => {
+  const postIntent = async () => {
     if (!currentUser) {
       alert('Please sign in first.');
       return;
     }
 
     const limits = getTierLimits(currentUser.tier);
-    const currentPosts = postings.filter((p) => p.name === currentUser.username);
-    const buyPosts = currentPosts.filter((p) => p.role === 'buyer').length;
-    const sellPosts = currentPosts.filter((p) => p.role === 'seller').length;
+    const mine = postings.filter((p) => p.name === currentUser.username);
+    const buyPosts = mine.filter((p) => p.role === 'buyer').length;
+    const sellPosts = mine.filter((p) => p.role === 'seller').length;
 
     if (role === 'buyer' && buyPosts >= limits.buy) {
       alert(`Your ${currentUser.tier} tier allows only ${limits.buy} buy post(s). Delete old posts to make new ones.`);
@@ -521,25 +489,77 @@ export default function WTPInteractiveDiagram() {
       return;
     }
 
-    const newPosting: Posting = {
-      id: Math.random().toString(36),
-      userId: getDeviceId(),
-      eventId,
+    const row = {
+      device_id: getDeviceId(),
+      event_id: eventId,
       role,
       percent: Math.round(clamp01((percent || 0) / 100) * 100),
       tickets: 1,
-      name: currentUser.username,
-      phone: currentUser.phone_e164,
+      username: currentUser.username,
+      phone_e164: currentUser.phone_e164,
       cohort: currentUser.cohort,
-      venmo: currentUser.venmo_handle,
+      venmo_handle: currentUser.venmo_handle,
       email: currentUser.wharton_email,
     };
 
-    setPostings((prev) => [...prev, newPosting]);
+    try {
+      const { data, error } = await supabase
+        .from('postings_public')
+        .upsert(row, {
+          onConflict: 'device_id,event_id,role',
+          ignoreDuplicates: false,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Post creation error:', error);
+        alert(`Post failed: ${error.message}. Please check your database schema and constraints.`);
+        return;
+      }
+      if (!data) {
+        alert('Post failed - no data returned');
+        return;
+      }
+
+      setPostings((prev) => {
+        const rest = prev.filter((p) => p.id !== String(data.id));
+        return [
+          {
+            id: String(data.id),
+            userId: data.device_id,
+            eventId: data.event_id,
+            role: data.role,
+            percent: data.percent,
+            tickets: data.tickets,
+            name: data.username,
+            phone: data.phone_e164,
+            cohort: data.cohort ?? undefined,
+            venmo: data.venmo_handle ?? undefined,
+            email: data.email ?? undefined,
+          },
+          ...rest,
+        ];
+      });
+    } catch (err: any) {
+      console.error('Post creation error:', err);
+      alert(`Post failed: ${err.message || 'Unknown error'}`);
+    }
   };
 
-  const deletePosting = (id: string) => {
-    setPostings((prev) => prev.filter((p) => p.id !== id));
+  const deletePosting = async (id: string) => {
+    try {
+      const { error } = await supabase.from('postings_public').delete().eq('id', id);
+      if (error) {
+        console.error('Delete error:', error);
+        alert(`Delete failed: ${error.message}`);
+      } else {
+        setPostings((prev) => prev.filter((p) => p.id !== id));
+      }
+    } catch (err: any) {
+      console.error('Delete error:', err);
+      alert(`Delete failed: ${err.message || 'Unknown error'}`);
+    }
   };
 
   const markTraded = (id: string) => {
@@ -550,99 +570,58 @@ export default function WTPInteractiveDiagram() {
     }
   };
 
-  const recordTrade = (buyerName: string, sellerName: string, agreedPct: number, tickets: number) => {
-    const trade: Trade = {
-      id: Math.random().toString(36),
-      buyerName,
-      sellerName,
-      eventId,
-      price: (agreedPct / 100) * eventPrice,
-      tickets,
-      timestamp: new Date(),
-    };
-    setTrades((prev) => [...prev, trade]);
-    setTotalTradedTickets((prev) => prev + tickets);
-  };
-
-  const deleteProfile = () => {
-    if (!currentUser) return;
-    if (confirm('Are you sure you want to delete your profile? This cannot be undone.')) {
-      setPostings((prev) => prev.filter((p) => p.name !== currentUser.username));
-      setCurrentUser(null);
-    }
-  };
-
+  /* -------- Chat (local only) -------- */
   const addComment = () => {
     if (!currentUser || !newComment.trim()) return;
-
-    const comment: Comment = {
-      id: Math.random().toString(36),
-      username: currentUser.username,
-      message: newComment.trim(),
-      timestamp: new Date(),
-    };
-    setComments((prev) => [...prev, comment]);
+    setComments((prev) => [
+      ...prev,
+      { id: Math.random().toString(36), username: currentUser.username, message: newComment.trim(), timestamp: new Date() },
+    ]);
     setNewComment('');
   };
 
-  // Matches (computed each render)
+  /* -------- Matches (computed) -------- */
   type Match = { me: Posting; other: Posting; agreedPct: number; tickets: number };
   const getMatches = (): Match[] => {
     if (!currentUser) return [];
-
     const mine = postings.filter((p) => p.name === currentUser.username && p.eventId === eventId);
     const others = postings.filter((p) => p.name !== currentUser.username && p.eventId === eventId);
-    const matches: Match[] = [];
-
+    const out: Match[] = [];
     for (const me of mine) {
-      const compatible = others.filter((o) => {
-        if (me.role === 'buyer' && o.role === 'seller') return me.percent >= o.percent;
-        if (me.role === 'seller' && o.role === 'buyer') return o.percent >= me.percent;
-        return false;
-      });
-
-      if (compatible.length === 0) continue;
-
+      const compatible = others.filter((o) =>
+        (me.role === 'buyer' && o.role === 'seller') ? me.percent >= o.percent
+        : (me.role === 'seller' && o.role === 'buyer') ? o.percent >= me.percent
+        : false
+      );
+      if (!compatible.length) continue;
       let filtered = compatible;
       if (currentUser.tier === 'Limited') filtered = compatible.filter((o) => Math.abs(me.percent - o.percent) === 0);
       else if (currentUser.tier === 'Basic') filtered = compatible.filter((o) => Math.abs(me.percent - o.percent) <= 10);
       else if (currentUser.tier === 'Pro') filtered = compatible.filter((o) => Math.abs(me.percent - o.percent) <= 25);
-      // Max sees all compatible
-
       const maxMatches = currentUser.tier === 'Limited' ? 3 : currentUser.tier === 'Basic' ? 5 : currentUser.tier === 'Pro' ? 10 : Infinity;
-
-      const sortedMatches = filtered
+      filtered
         .sort((a, b) => Math.abs(me.percent - a.percent) - Math.abs(me.percent - b.percent))
-        .slice(0, maxMatches);
-
-      sortedMatches.forEach((other) => {
-        const agreedPct = Math.min(me.percent, other.percent);
-        matches.push({
-          me,
-          other,
-          agreedPct,
-          tickets: Math.min(me.tickets, other.tickets),
-        });
-      });
+        .slice(0, maxMatches)
+        .forEach((other) =>
+          out.push({ me, other, agreedPct: Math.min(me.percent, other.percent), tickets: Math.min(me.tickets, other.tickets) })
+        );
     }
-
-    return matches;
+    return out;
   };
 
   const myMatches = getMatches();
   const myListings = currentUser ? postings.filter((p) => p.name === currentUser.username) : [];
 
-  // Render
+  /* -------- UI -------- */
   return (
     <div className="min-h-screen w-full bg-gray-50 text-gray-900">
-      <div className="max-w-7xl mx-auto p-6 md:p-8">
+      <div className="mx-auto max-w-7xl p-6 md:p-8">
         {/* Header */}
         <div className="mb-4">
           <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
           <div className="mt-2 flex items-center gap-4">
             <p className="flex-1 text-gray-700">
-              Plans at Wharton change all the time! Buy and resell Wharton tickets at face value or lower. Create an
-              account, and buy/sell at your desired percentage price point.
+              Buy and resell Wharton tickets at face value or lower. Create an account with your name and post your bid/ask.
             </p>
             <div className="flex items-center gap-2 text-sm">
               <Trophy className="text-yellow-500" size={20} />
@@ -652,126 +631,93 @@ export default function WTPInteractiveDiagram() {
           </div>
         </div>
 
-        {/* Tier Selection */}
-        {currentUser && (
-          <Card className="mb-6 p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-lg font-semibold">Choose Your Tier</h3>
-              <span className="text-sm text-gray-600">Current: {currentUser.tier}</span>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {Object.entries(TIER_INFO).map(([tier, info]) => (
-                <div key={tier} className="relative">
-                  <button
-                    className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                      currentUser.tier === (tier as Tier)
-                        ? 'bg-indigo-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                    }`}
-                    onClick={() => {
-                      setCurrentUser((prev) => (prev ? { ...prev, tier: tier as Tier } : prev));
-                      setShowTierDropdown(showTierDropdown === (tier as Tier) ? null : (tier as Tier));
-                    }}
-                  >
-                    {tier} {info.price}
-                  </button>
-                  {showTierDropdown === (tier as Tier) && (
-                    <div className="min-w-64 absolute left-0 top-full z-10 mt-1 rounded-lg border bg-white p-3 shadow-lg">
-                      <ul className="space-y-1 text-xs">
-                        {info.features.map((feature, idx) => (
-                          <li key={idx} className="text-gray-600">
-                            • {feature}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        )}
-
         {/* Auth */}
         {!currentUser ? (
           <Card className="mb-6 p-5">
-            <SectionTitle title="Create an account or sign in" subtitle="Test accounts: joe@wharton.upenn.edu / wharton2025 OR andrew.bilden@wharton.upenn.edu / andrew2025" />
-            <form onSubmit={authMode === 'signup' ? handleSignup : handleLogin} className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <Label>Username or Email</Label>
-                <Input
-                  placeholder="Joe Wharton or joe@wharton.upenn.edu"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  required
-                />
-              </div>
-              <div>
-                <Label>Password</Label>
-                <Input
-                  type="password"
-                  placeholder="At least 8 characters"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                />
-              </div>
-
-              {authMode === 'signup' && (
-                <div className="contents">
-                  <div>
-                    <Label>WG Cohort</Label>
-                    <Select value={cohort} onChange={(e) => setCohort(e.target.value as 'WG26' | 'WG27')}>
-                      <option value="WG26">WG26</option>
-                      <option value="WG27">WG27</option>
+            <SectionTitle title={authMode === 'signup' ? 'Create an account' : 'Sign in to your account'} />
+            {authMode === 'signup' ? (
+              <form onSubmit={handleSignup} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <Label>Username (First Last)</Label>
+                  <Input
+                    placeholder="Joe Wharton"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label>Password</Label>
+                  <Input 
+                    type="password" 
+                    placeholder="At least 8 characters" 
+                    value={password} 
+                    onChange={(e) => setPassword(e.target.value)} 
+                    required 
+                  />
+                </div>
+                <div>
+                  <Label>WG Cohort</Label>
+                  <Select value={cohort} onChange={(e) => setCohort(e.target.value as 'WG26' | 'WG27')}>
+                    <option value="WG26">WG26</option>
+                    <option value="WG27">WG27</option>
+                  </Select>
+                </div>
+                <div>
+                  <Label>Phone Number</Label>
+                  <div className="flex items-center gap-2">
+                    <Select className="w-28" value={areaCode} onChange={(e) => setAreaCode(e.target.value)}>
+                      {AREA_CODES.map((c) => <option key={c} value={c}>{c}</option>)}
                     </Select>
-                  </div>
-
-                  <div>
-                    <Label>Phone Number</Label>
-                    <div className="flex items-center gap-2">
-                      <Select className="w-28" value={areaCode} onChange={(e) => setAreaCode(e.target.value)}>
-                        {AREA_CODES.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))}
-                      </Select>
-                      <Input
-                        placeholder="digits"
-                        value={phoneDigits}
-                        onChange={(e) => setPhoneDigits(onlyDigits(e.target.value))}
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <Label>Venmo Handle</Label>
-                    <Input placeholder="@yourhandle" value={venmo} onChange={(e) => setVenmo(e.target.value)} required />
-                  </div>
-
-                  <div>
-                    <Label>Wharton Email</Label>
-                    <Input
-                      type="email"
-                      placeholder="you@wharton.upenn.edu"
-                      value={whartonEmail}
-                      onChange={(e) => setWhartonEmail(e.target.value)}
-                      required
-                    />
+                    <Input placeholder="digits" value={phoneDigits} onChange={(e) => setPhoneDigits(onlyDigits(e.target.value))} required />
                   </div>
                 </div>
-              )}
-
-              <div className="md:col-span-2 flex items-center gap-2">
-                <Button type="submit">{authMode === 'signup' ? 'Create account' : 'Sign in'}</Button>
-                <GhostButton type="button" onClick={() => setAuthMode(authMode === 'signup' ? 'login' : 'signup')}>
-                  {authMode === 'signup' ? 'Have an account? Sign in' : 'New here? Create account'}
-                </GhostButton>
-                {authError && <span className="text-sm text-red-600">{authError}</span>}
-              </div>
-            </form>
+                <div>
+                  <Label>Venmo Handle</Label>
+                  <Input placeholder="@yourhandle" value={venmo} onChange={(e) => setVenmo(e.target.value)} required />
+                </div>
+                <div>
+                  <Label>Wharton Email</Label>
+                  <Input type="email" placeholder="you@wharton.upenn.edu" value={whartonEmail} onChange={(e) => setWhartonEmail(e.target.value)} required />
+                </div>
+                <div className="md:col-span-2 flex items-center gap-2">
+                  <Button type="submit">Create account</Button>
+                  <GhostButton type="button" onClick={() => setAuthMode('login')}>
+                    Have an account? Sign in
+                  </GhostButton>
+                  {authError && <span className="text-sm text-red-600">{authError}</span>}
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleLogin} className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <Label>Username or Email</Label>
+                  <Input
+                    placeholder="Joe Wharton or you@wharton.upenn.edu"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <Label>Password</Label>
+                  <Input 
+                    type="password" 
+                    placeholder="Your password" 
+                    value={password} 
+                    onChange={(e) => setPassword(e.target.value)} 
+                    required 
+                  />
+                </div>
+                <div className="md:col-span-2 flex items-center gap-2">
+                  <Button type="submit">Sign in</Button>
+                  <GhostButton type="button" onClick={() => setAuthMode('signup')}>
+                    New here? Create account
+                  </GhostButton>
+                  {authError && <span className="text-sm text-red-600">{authError}</span>}
+                </div>
+              </form>
+            )}
           </Card>
         ) : (
           <div className="mb-4 flex items-center justify-between">
@@ -782,13 +728,19 @@ export default function WTPInteractiveDiagram() {
               </span>
             </div>
             <div className="flex gap-2">
-              <GhostButton onClick={deleteProfile}>Delete Profile</GhostButton>
-              <GhostButton onClick={() => setCurrentUser(null)}>Sign out</GhostButton>
+              <GhostButton
+                onClick={async () => {
+                  await supabase.auth.signOut();
+                  setCurrentUser(null);
+                }}
+              >
+                Sign out
+              </GhostButton>
             </div>
           </div>
         )}
 
-        {/* Main Content Grid */}
+        {/* Main Grid */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
           {/* LEFT: Inputs & Matches */}
           <Card className="p-5 lg:col-span-1">
@@ -828,11 +780,7 @@ export default function WTPInteractiveDiagram() {
                 <div>
                   <Label>Event</Label>
                   <Select value={eventId} onChange={(e) => setEventId(e.target.value as (typeof EVENTS)[number]['id'])}>
-                    {EVENTS.map((ev) => (
-                      <option key={ev.id} value={ev.id}>
-                        {ev.label}
-                      </option>
-                    ))}
+                    {EVENTS.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
                   </Select>
                 </div>
                 <div>
@@ -845,9 +793,7 @@ export default function WTPInteractiveDiagram() {
                       value={percent}
                       onChange={(e) => setPercent(Number(e.target.value))}
                       className="slider h-3 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
-                      style={{
-                        background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${percent}%, #e5e7eb ${percent}%, #e5e7eb 100%)`,
-                      }}
+                      style={{ background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${percent}%, #e5e7eb ${percent}%, #e5e7eb 100%)` }}
                     />
                     <div className="mt-1 flex justify-between text-xs text-gray-500">
                       <span>0%</span>
@@ -862,15 +808,11 @@ export default function WTPInteractiveDiagram() {
                   <p className="mt-1 text-xs text-gray-500">Fixed at 1 ticket per post</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button type="button" onClick={postIntent}>
-                    Post
-                  </Button>
+                  <Button type="button" onClick={postIntent}>Post</Button>
                 </div>
 
-                {/* Matches */}
                 <div className="pt-2">
                   <SectionTitle title="Matches" subtitle="Your tier determines match visibility and range." />
-
                   {myMatches.length === 0 ? (
                     <div className="text-sm text-gray-400">No matches yet</div>
                   ) : (
@@ -879,71 +821,35 @@ export default function WTPInteractiveDiagram() {
                         const buyer = m.me.role === 'buyer' ? m.me : m.other;
                         const seller = m.me.role === 'seller' ? m.me : m.other;
                         const agreedPct = m.agreedPct;
-
                         return (
                           <div key={i} className="rounded-lg border bg-gray-50 p-3">
                             <div className="mb-2 flex items-center justify-between font-semibold">
-                              <span>
-                                {seller.name} ↔ {buyer.name} at {agreedPct}%
-                              </span>
-                              <WeTradedButton onClick={() => recordTrade(buyer.name, seller.name, agreedPct, m.tickets)} />
+                              <span>{seller.name} ↔ {buyer.name} at {agreedPct}%</span>
+                              <WeTradedButton onClick={() => {
+                                setTrades((prev) => [...prev, {
+                                  id: Math.random().toString(36),
+                                  buyerName: buyer.name,
+                                  sellerName: seller.name,
+                                  eventId,
+                                  price: (agreedPct / 100) * eventPrice,
+                                  tickets: Math.min(m.me.tickets, m.other.tickets),
+                                  timestamp: new Date(),
+                                }]);
+                                setTotalTradedTickets((prev) => prev + 1);
+                              }} />
                             </div>
-
                             <div className="grid grid-cols-2 gap-2 text-xs text-gray-700">
                               <div>
                                 <div className="font-semibold">Seller</div>
                                 <div>Name: {seller.name}</div>
-                                <div className="flex items-center gap-1">
-                                  Phone: {seller.phone}
-                                  <button
-                                    onClick={() => navigator.clipboard?.writeText(seller.phone)}
-                                    className="px-1 text-indigo-600 hover:text-indigo-800"
-                                    type="button"
-                                  >
-                                    📋
-                                  </button>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  Venmo: @{seller.venmo}
-                                  <button
-                                    onClick={() => navigator.clipboard?.writeText(String(seller.venmo ?? ''))}
-                                    className="px-1 text-indigo-600 hover:text-indigo-800"
-                                    type="button"
-                                  >
-                                    📋
-                                  </button>
-                                </div>
-                                <div>Email: {seller.email}</div>
-                                <div>Cohort: {seller.cohort}</div>
+                                <div className="flex items-center gap-1">Phone: {seller.phone}</div>
                               </div>
                               <div>
                                 <div className="font-semibold">Buyer</div>
                                 <div>Name: {buyer.name}</div>
-                                <div className="flex items-center gap-1">
-                                  Phone: {buyer.phone}
-                                  <button
-                                    onClick={() => navigator.clipboard?.writeText(buyer.phone)}
-                                    className="px-1 text-indigo-600 hover:text-indigo-800"
-                                    type="button"
-                                  >
-                                    📋
-                                  </button>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  Venmo: @{buyer.venmo}
-                                  <button
-                                    onClick={() => navigator.clipboard?.writeText(String(buyer.venmo ?? ''))}
-                                    className="px-1 text-indigo-600 hover:text-indigo-800"
-                                    type="button"
-                                  >
-                                    📋
-                                  </button>
-                                </div>
-                                <div>Email: {buyer.email}</div>
-                                <div>Cohort: {buyer.cohort}</div>
+                                <div className="flex items-center gap-1">Phone: {buyer.phone}</div>
                               </div>
                             </div>
-
                             <div className="mt-1 text-right text-xs text-gray-500">@ {toMoney((agreedPct / 100) * eventPrice)}</div>
                           </div>
                         );
@@ -957,14 +863,10 @@ export default function WTPInteractiveDiagram() {
             )}
           </Card>
 
-          {/* MIDDLE: Charts (2 columns) */}
-          <div className="lg:col-span-2 grid gap-6 lg:grid-cols-1">
-            {/* Distribution Chart */}
+          {/* MIDDLE: Charts */}
+          <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
             <Card className="p-5">
-              <SectionTitle
-                title="Market Distribution"
-                subtitle={`Event: ${currentEvent?.label ?? ''} - Left bars = sellers (purple), right bars = buyers (green)`}
-              />
+              <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} - Left bars = sellers (purple), right bars = buyers (green)`} />
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart
@@ -974,7 +876,7 @@ export default function WTPInteractiveDiagram() {
                       { bucket: '70-80%', seller: -Math.floor(Math.random() * 12), buyer: Math.floor(Math.random() * 8) },
                       { bucket: '80-90%', seller: -Math.floor(Math.random() * 10), buyer: Math.floor(Math.random() * 12) },
                       { bucket: '90-100%', seller: -Math.floor(Math.random() * 6), buyer: Math.floor(Math.random() * 15) },
-                      { bucket: '100%', seller: -Math.floor(Math.random() * 4), buyer: Math.floor(Math.random() * 10) },
+                      { bucket: '100%',   seller: -Math.floor(Math.random() * 4), buyer: Math.floor(Math.random() * 10) },
                     ]}
                     layout="vertical"
                     margin={{ top: 10, right: 20, left: 20, bottom: 0 }}
@@ -985,13 +887,12 @@ export default function WTPInteractiveDiagram() {
                     <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
                     <Legend />
                     <Bar dataKey="seller" name="Sellers" fill="#6366F1" />
-                    <Bar dataKey="buyer" name="Buyers" fill="#10B981" />
+                    <Bar dataKey="buyer"  name="Buyers"  fill="#10B981" />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
             </Card>
 
-            {/* Supply vs Demand */}
             <Card className="p-5">
               <SectionTitle title="Supply vs Demand Curves" subtitle="Market clearing price and volume analysis" />
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -1042,36 +943,31 @@ export default function WTPInteractiveDiagram() {
             </Card>
           </div>
 
-          {/* RIGHT: Comments Forum */}
+          {/* RIGHT: Chat */}
           <Card className="p-5 lg:col-span-1">
             <SectionTitle title="Community Chat" subtitle="Public discussion forum" />
             <div className="space-y-4">
-              {/* Comments Display */}
               <div className="max-h-64 space-y-3 overflow-y-auto rounded-lg bg-gray-50 p-3">
-                {comments.map((comment) => (
-                  <div key={comment.id} className="text-sm">
-                    <div className="font-semibold text-indigo-600">{comment.username}</div>
-                    <div className="text-gray-700">{comment.message}</div>
-                    <div className="text-xs text-gray-500">{comment.timestamp.toLocaleTimeString()}</div>
+                {comments.map((c) => (
+                  <div key={c.id} className="text-sm">
+                    <div className="font-semibold text-indigo-600">{c.username}</div>
+                    <div className="text-gray-700">{c.message}</div>
+                    <div className="text-xs text-gray-500">{c.timestamp.toLocaleTimeString()}</div>
                   </div>
                 ))}
               </div>
-
-              {/* Add Comment */}
               {currentUser && (
                 <div className="flex gap-2">
                   <Input
                     placeholder="Type your message..."
                     value={newComment}
                     onChange={(e) => setNewComment(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') addComment();
-                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter') addComment(); }}
                     className="flex-1"
                   />
-                  <Button onClick={addComment} type="button">
-                    <MessageCircle size={16} />
-                  </Button>
+                    <Button onClick={addComment} type="button">
+                      <MessageCircle size={16} />
+                    </Button>
                 </div>
               )}
             </div>
@@ -1083,24 +979,12 @@ export default function WTPInteractiveDiagram() {
           <Card className="mt-6 p-5">
             <SectionTitle title="My Profile" />
             <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-3">
-              <div>
-                <strong>Username:</strong> {currentUser.username}
-              </div>
-              <div>
-                <strong>Email:</strong> {currentUser.wharton_email}
-              </div>
-              <div>
-                <strong>WG Cohort:</strong> {currentUser.cohort}
-              </div>
-              <div>
-                <strong>Phone:</strong> {currentUser.phone_e164}
-              </div>
-              <div>
-                <strong>Venmo:</strong> @{currentUser.venmo_handle}
-              </div>
-              <div>
-                <strong>Tier:</strong> {currentUser.tier}
-              </div>
+              <div><strong>Username:</strong> {currentUser.username}</div>
+              <div><strong>Email:</strong> {currentUser.wharton_email}</div>
+              <div><strong>WG Cohort:</strong> {currentUser.cohort}</div>
+              <div><strong>Phone:</strong> {currentUser.phone_e164}</div>
+              <div><strong>Venmo:</strong> @{currentUser.venmo_handle}</div>
+              <div><strong>Tier:</strong> {currentUser.tier}</div>
             </div>
 
             <div className="mt-6">
@@ -1111,9 +995,7 @@ export default function WTPInteractiveDiagram() {
                 <ul className="divide-y divide-gray-200">
                   {myListings.map((l) => (
                     <li key={l.id} className="flex items-center justify-between py-2 text-sm">
-                      <span>
-                        {l.role} 1 ticket @ {l.percent}% --- {EVENTS.find((ev) => ev.id === l.eventId)?.label}
-                      </span>
+                      <span>{l.role} 1 ticket @ {l.percent}% — {EVENTS.find((ev) => ev.id === l.eventId)?.label}</span>
                       <div className="flex items-center gap-2">
                         <TradedButton onClick={() => markTraded(l.id)} />
                         <DeleteButton onClick={() => deletePosting(l.id)} />
@@ -1127,26 +1009,10 @@ export default function WTPInteractiveDiagram() {
         )}
       </div>
 
-      {/* Custom CSS for slider */}
+      {/* Slider thumb styling */}
       <style jsx>{`
-        .slider::-webkit-slider-thumb {
-          appearance: none;
-          width: 20px;
-          height: 20px;
-          border-radius: 50%;
-          background: #4f46e5;
-          cursor: pointer;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-        }
-        .slider::-moz-range-thumb {
-          width: 20px;
-          height: 20px;
-          border-radius: 50%;
-          background: #4f46e5;
-          cursor: pointer;
-          border: none;
-          box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-        }
+        .slider::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .slider::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; cursor: pointer; border: none; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
       `}</style>
     </div>
   );
