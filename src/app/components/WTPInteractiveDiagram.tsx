@@ -16,54 +16,68 @@ import {
 } from "recharts";
 import { ThumbsUp, ThumbsDown, X, CheckCircle, MessageCircle, Trophy, Users } from "lucide-react";
 
-/* =========================================================== 
+/* ===========================================================
    Mock Supabase for demonstration - replace with real supabase
    =========================================================== */
 const mockSupabase = {
   auth: {
-    getSession: () => Promise.resolve({ data: { session: null } }),
-    signUp: ({ email, password }) => {
+    getSession: () =>
+      Promise.resolve({ data: { session: null } }),
+
+    // ✅ add param types
+    signUp: ({ email, password }: { email: string; password: string }) => {
       if (email && password.length >= 8) {
-        return Promise.resolve({ error: null });
+        return Promise.resolve({ error: null as null | { message: string } });
       }
-      return Promise.resolve({ error: { message: "Invalid credentials" } });
+      return Promise.resolve({ error: { message: 'Invalid credentials' } });
     },
-    signInWithPassword: ({ email, password }) => {
+
+    // ✅ add param types
+    signInWithPassword: ({ email, password }: { email: string; password: string }) => {
       // Test accounts
-      if ((email === "test@wharton.upenn.edu" && password === "testpass123") ||
-          (email === "joe@wharton.upenn.edu" && password === "wharton2025")) {
-        return Promise.resolve({ error: null });
+      if (
+        (email === 'test@wharton.upenn.edu' && password === 'testpass123') ||
+        (email === 'joe@wharton.upenn.edu' && password === 'wharton2025')
+      ) {
+        return Promise.resolve({ error: null as null | { message: string } });
       }
-      return Promise.resolve({ error: { message: "Invalid credentials" } });
+      return Promise.resolve({ error: { message: 'Invalid credentials' } });
     },
-    signOut: () => Promise.resolve({ error: null }),
-    onAuthStateChange: (callback) => ({ 
-      data: { 
-        subscription: { 
-          unsubscribe: () => {} 
-        } 
-      } 
-    })
-  },
-  from: (table) => ({
-    select: () => ({
-      eq: () => ({
-        maybeSingle: () => Promise.resolve({ data: null })
-      }),
-      order: () => Promise.resolve({ data: [] })
+
+    signOut: () => Promise.resolve({ error: null as null | { message: string } }),
+
+    // add a loose type for the callback to avoid implicit any
+    onAuthStateChange: (_callback: (..._args: any[]) => void) => ({
+      data: {
+        subscription: {
+          unsubscribe: () => {},
+        },
+      },
     }),
-    insert: () => Promise.resolve({ error: null }),
-    upsert: () => Promise.resolve({ error: null }),
+  },
+
+  // type the table name to string (loose return typing keeps it simple)
+  from: (_table: string) => ({
+    select: () => ({
+      eq: (_col?: any, _val?: any) => ({
+        maybeSingle: () => Promise.resolve({ data: null as any }),
+      }),
+      order: (_col?: string, _opts?: any) => Promise.resolve({ data: [] as any[] }),
+    }),
+    insert: (_rows?: any) => Promise.resolve({ error: null as null | { message: string } }),
+    upsert: (_rows?: any) => Promise.resolve({ error: null as null | { message: string } }),
     delete: () => ({
-      eq: () => Promise.resolve({ error: null })
-    })
+      eq: (_col?: any, _val?: any) => Promise.resolve({ error: null as null | { message: string } }),
+    }),
   }),
-  channel: () => ({
-    on: () => ({
-      subscribe: () => {}
-    })
+
+  channel: (_name?: string) => ({
+    on: (..._args: any[]) => ({
+      subscribe: () => {},
+    }),
   }),
-  removeChannel: () => {}
+
+  removeChannel: (_ch?: any) => {},
 };
 
 /* =========================================================== 
@@ -393,7 +407,6 @@ export default function WTPInteractiveDiagram() {
   const [selectedTier, setSelectedTier] = useState(null);
   const [showTierDropdown, setShowTierDropdown] = useState(null);
   const [matchMode, setMatchMode] = useState("direct");
-  const [pollVote, setPollVote] = useState(null);
   const [totalTradedTickets, setTotalTradedTickets] = useState(47);
   const [comments, setComments] = useState([
     { id: "1", username: "Alice Chen", message: "Looking forward to the Red Ball!", timestamp: new Date() },
@@ -881,36 +894,6 @@ export default function WTPInteractiveDiagram() {
             </div>
           </div>
         )}
-
-        {/* Poll */}
-        {currentUser && (
-          <Card className="p-4 mb-6">
-            <div className="flex items-center justify-between">
-              <p className="text-sm">Would you ever consider selling your ticket above the market price? (Anonymous)</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPollVote("yes")}
-                  className={`flex items-center gap-1 px-3 py-1 rounded-lg transition ${
-                    pollVote === "yes" ? 'bg-green-100 text-green-700' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  <ThumbsUp size={16} />
-                  Yes
-                </button>
-                <button
-                  onClick={() => setPollVote("no")}
-                  className={`flex items-center gap-1 px-3 py-1 rounded-lg transition ${
-                    pollVote === "no" ? 'bg-red-100 text-red-700' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  <ThumbsDown size={16} />
-                  No
-                </button>
-              </div>
-            </div>
-          </Card>
-        )}
-
         {/* Main Content Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* LEFT: Inputs & Matches */}
