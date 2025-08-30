@@ -133,7 +133,8 @@ const buildE164 = (code: string, digits: string): string => {
 };
 const isValidE164 = (e164: string): boolean => /^\+\d{6,16}$/.test((e164 || '').trim());
 const normalizeVenmo = (h: string): string => (h || '').trim().replace(/^@/, '');
-const isValidVenmo = (h: string): boolean => /^[A-Za-z0-9_]{3,30}$/.test(normalizeVenmo(h));
+// Allow letters, numbers, underscore, dash, and dot (2..32 chars)
+const isValidVenmo = (h: string): boolean => /^[A-Za-z0-9._-]{2,32}$/.test(normalizeVenmo(h));
 const copy = (text?: string) => text && navigator.clipboard?.writeText(text);
 
 // Market posting (price-based) for market-type events (e.g., US Open)
@@ -172,6 +173,7 @@ export default function WTPInteractiveDiagram() {
   const [newComment, setNewComment] = useState<string>('');
   const [trades, setTrades] = useState<Trade[]>([]);
   const [postNotice, setPostNotice] = useState<string>(''); // success banner
+  const [showUpgrade, setShowUpgrade] = useState<boolean>(false);
 
   // Auth fields
   const [username, setUsername] = useState<string>('');
@@ -206,6 +208,46 @@ export default function WTPInteractiveDiagram() {
 
   const currentEvent = useMemo(() => allEvents.find((e) => e.id === eventId), [allEvents, eventId]);
   const eventPrice = currentEvent?.price ?? 0;
+  const showAdmin = process.env.NEXT_PUBLIC_SHOW_ADMIN === '1' || process.env.NEXT_PUBLIC_SHOW_ADMIN === 'true';
+  const adminEnvUser = process.env.NEXT_PUBLIC_ADMIN_USER || 'admin';
+  const adminEnvPass = process.env.NEXT_PUBLIC_ADMIN_PASS || 'marketmaker';
+
+  // Choose the most recently added event for logged-out users (FOMO)
+  const latestEventId = useMemo(() => {
+    if (serverEvents.length) return serverEvents[serverEvents.length - 1].id;
+    return BASE_EVENTS[BASE_EVENTS.length - 1].id; // fallback
+  }, [serverEvents]);
+
+  useEffect(() => {
+    if (!currentUser && latestEventId && eventId !== latestEventId) setEventId(latestEventId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestEventId, currentUser]);
+
+  const ensureEventExists = async (): Promise<boolean> => {
+    try {
+      const { data: ev, error: evErr } = await supabase.from('events').select('id').eq('id', eventId).maybeSingle();
+      if (!evErr && ev) return true;
+    } catch {}
+    try {
+      const label = currentEvent?.label || (eventId === 'usopen' ? 'US Open (Market Pricing)' : eventId);
+      const type: any = currentEvent?.type || 'market';
+      const priceVal: any = currentEvent?.price ?? null;
+      const { error } = await supabase.rpc('tm_create_event', {
+        p_username: adminEnvUser,
+        p_password: adminEnvPass,
+        p_id: eventId,
+        p_label: label,
+        p_type: type,
+        p_price: priceVal,
+      });
+      if (error) { console.warn('tm_create_event failed:', error.message); return false; }
+      await refreshEvents();
+      return true;
+    } catch (e) {
+      console.warn('ensureEventExists failed');
+      return false;
+    }
+  };
 
   /* -------- Load session, profile, postings, chat; wire realtime -------- */
   useEffect(() => {
@@ -776,8 +818,8 @@ export default function WTPInteractiveDiagram() {
         {/* Header */}
         <div className="mb-4">
           <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
-          <div className="mt-2 flex items-center gap-4">
-            <p className="flex-1 text-gray-700">
+          <div className="mt-2 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
+            <p className="md:flex-1 text-gray-700">
               Buy and resell Wharton tickets at face value or lower. Create an account with your email and post your bid/ask.
             </p>
             <div className="flex items-center gap-4 text-base sm:text-lg">
@@ -814,7 +856,16 @@ export default function WTPInteractiveDiagram() {
                   {open && (
                     <div className="px-4 pb-4 text-sm text-gray-700">
                       <ul className="list-inside list-disc space-y-1">
-                        {info.features.map((f, i) => <li key={i}>{f}</li>)}
+                        {info.features.map((f, i) => (
+                          <li key={i} className="flex items-center gap-2">
+                            <span>{f}</span>
+                            {tier === 'Basic' && /entire market/i.test(f) && (
+                              <Button type="button" className="bg-blue-600 hover:bg-blue-500 px-2 py-1 text-xs" onClick={() => setShowUpgrade(true)}>
+                                Upgrade to Basic
+                              </Button>
+                            )}
+                          </li>
+                        ))}
                       </ul>
                     </div>
                   )}
@@ -985,6 +1036,8 @@ export default function WTPInteractiveDiagram() {
                         const price = Number(selectedMarketPrice);
                         if (!price || price <= 0) { alert('Enter a valid price'); return; }
                         if (!desc) { alert('Please add a short description'); return; }
+                        const ok = await ensureEventExists();
+                        if (!ok) { alert('Event not found and could not be created. Please seed events via SQL or admin RPC.'); return; }
                         try {
                           const row = {
                             device_id: getDeviceId(),
@@ -1048,7 +1101,7 @@ export default function WTPInteractiveDiagram() {
                 const mm = myMarketMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="max-h-64 space-y-3 overflow-auto text-sm">
+                  <div className="space-y-3 text-sm">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
@@ -1090,7 +1143,7 @@ export default function WTPInteractiveDiagram() {
                 const mm = myMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="max-h-64 space-y-3 overflow-auto text-sm">
+                  <div className="space-y-3 text-sm">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
@@ -1131,6 +1184,32 @@ export default function WTPInteractiveDiagram() {
             )}
           </Card>
 
+          {/* My Listings under Matches */}
+          {currentUser && (
+            <Card className="p-5 lg:col-span-3">
+              <SectionTitle title="My Listings" subtitle="Active posts you created" />
+              {myListings.length === 0 ? (
+                <div className="text-sm text-gray-500">No active listings.</div>
+              ) : (
+                <ul className="divide-y divide-gray-200">
+                  {myListings.map((l) => (
+                    <li key={l.id} className="flex items-center justify-between py-2 text-sm">
+                      {l.source === 'market' ? (
+                        <span>{l.role} 1 ticket @ ${l.price} — {l.label}</span>
+                      ) : (
+                        <span>{l.role} 1 ticket @ {l.percent}% — {l.label}</span>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <TradedButton onClick={() => markTraded(l.id, l.source)} />
+                        <DeleteButton onClick={() => deletePosting(l.id, l.source)} />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+          )}
+
           {/* MIDDLE: Charts */}
           <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
             {currentEvent?.type === 'ceiling' ? (
@@ -1150,7 +1229,7 @@ export default function WTPInteractiveDiagram() {
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
-                  {filtered.length === 0 && <div className="mt-2 text-xs text-gray-500">No postings yet for this event.</div>}
+                  {/* Hide 'no postings' message for public FOMO view */}
                 </Card>
 
                 <Card className="p-5">
@@ -1175,8 +1254,8 @@ export default function WTPInteractiveDiagram() {
                     <div className="grid content-start gap-3 lg:col-span-1">
                       <Card className="p-4">
                         <div className="text-sm text-gray-500">Clearing Price</div>
-                        <div className="text-2xl font-bold">{clearing}%</div>
-                        <div className="text-sm text-gray-600">≈ {toMoney(eventPrice * (clearing / 100))}</div>
+                        <div className="text-2xl font-bold">{currentUser ? `${clearing}%` : '-%'}</div>
+                        <div className="text-sm text-gray-600">≈ {currentUser ? toMoney(eventPrice * (clearing / 100)) : '—'}</div>
                       </Card>
                       <Card className="p-4">
                         <div className="text-sm text-gray-500">Active Buyers</div>
@@ -1193,22 +1272,23 @@ export default function WTPInteractiveDiagram() {
             ) : (
               <>
               <Card className="p-5">
-                <SectionTitle title="Market Options" subtitle="Discrete supply (sellers) and demand (buyers) at price; hover for details" />
+                  <SectionTitle title="Market Options" subtitle="Discrete supply (sellers) and demand (buyers) at price; hover for details" />
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                   <div className="lg:col-span-2">
                     <div className="h-72">
                       <ResponsiveContainer width="100%" height="100%">
                         <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
                           <line x1="5" y1="80" x2="95" y2="80" stroke="#d1d5db" strokeWidth="1" />
-                          {/* price ticks every $20 from min..max */}
+                          {/* price ticks every $100 from domain min..max */}
                           {(() => {
                             const prices = marketPoints.map(p => p.price);
-                            const min = prices.length ? Math.min(...prices) : 60;
-                            const max = prices.length ? Math.max(...prices) : 200;
-                            const lo = Math.floor(min / 20) * 20;
-                            const hi = Math.ceil(max / 20) * 20;
+                            const step = 100;
+                            const min = prices.length ? Math.min(...prices) : 0;
+                            const max = prices.length ? Math.max(...prices) : step;
+                            const lo = Math.floor(min / step) * step;
+                            const hi = Math.max(lo + step, Math.ceil(max / step) * step);
                             const ticks = [] as number[];
-                            for (let v = lo; v <= hi; v += 20) ticks.push(v);
+                            for (let v = lo; v <= hi; v += step) ticks.push(v);
                             return (
                               <g>
                                 {ticks.map((v, i) => {
@@ -1226,10 +1306,13 @@ export default function WTPInteractiveDiagram() {
                           {/* circles */}
                           {(() => {
                             const prices = marketPoints.map(p => p.price);
-                            const min = prices.length ? Math.min(...prices) : 60;
-                            const max = prices.length ? Math.max(...prices) : 200;
+                            const step = 100;
+                            const min = prices.length ? Math.min(...prices) : 0;
+                            const max = prices.length ? Math.max(...prices) : step;
+                            const lo = Math.floor(min / step) * step;
+                            const hi = Math.max(lo + step, Math.ceil(max / step) * step);
                             return marketPoints.map((pt, idx) => {
-                              const x = 5 + ((pt.price - Math.min(min, pt.price)) / Math.max(1, (Math.max(max, pt.price) - Math.min(min, pt.price)))) * 90;
+                              const x = 5 + ((pt.price - lo) / Math.max(1, (hi - lo))) * 90;
                               const y = 78 - ((idx % 4) * 8); // small vertical staggering
                               const fill = pt.role === 'seller' ? '#6366F1' : '#10B981';
                               const stroke = pt.role === 'seller' ? '#4338CA' : '#059669';
@@ -1288,7 +1371,7 @@ export default function WTPInteractiveDiagram() {
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
-                {marketFiltered.length === 0 && <div className="mt-2 text-xs text-gray-500">No postings yet for this event.</div>}
+                {/* Hide 'no postings' message for public FOMO view */}
               </Card>
               </>
             )}
@@ -1327,7 +1410,8 @@ export default function WTPInteractiveDiagram() {
           </Card>
         </div>
 
-        {/* Admin */}
+        {/* Admin (hidden by default; enable with NEXT_PUBLIC_SHOW_ADMIN=1) */}
+        {showAdmin && (
         <Card className="mt-6 p-5">
           <SectionTitle title="Admin" subtitle="Seed new events (market or ceiling pricing)" />
           {!isAdmin ? (
@@ -1409,41 +1493,24 @@ export default function WTPInteractiveDiagram() {
             </div>
           )}
         </Card>
+        )}
 
-        {/* My Profile & Listings */}
+        {/* My Profile */}
         {currentUser && (
           <Card className="mt-6 p-5">
             <SectionTitle title="My Profile" />
-            <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-3 items-center">
               <div><strong>Full Name:</strong> {currentUser.username}</div>
               <div><strong>Email/Username:</strong> {currentUser.wharton_email}</div>
               <div><strong>WG Cohort:</strong> {currentUser.cohort}</div>
               <div><strong>Phone:</strong> {currentUser.phone_e164}</div>
               <div><strong>Venmo:</strong> @{currentUser.venmo_handle}</div>
-              <div><strong>Tier:</strong> {currentUser.tier}</div>
-            </div>
-
-            <div className="mt-6">
-              <SectionTitle title="My Listings" subtitle="Active posts you created" />
-              {myListings.length === 0 ? (
-                <div className="text-sm text-gray-500">No active listings.</div>
-              ) : (
-                <ul className="divide-y divide-gray-200">
-                  {myListings.map((l) => (
-                    <li key={l.id} className="flex items-center justify-between py-2 text-sm">
-                      {l.source === 'market' ? (
-                        <span>{l.role} 1 ticket @ ${l.price} — {l.label}</span>
-                      ) : (
-                        <span>{l.role} 1 ticket @ {l.percent}% — {l.label}</span>
-                      )}
-                      <div className="flex items-center gap-2">
-                        <TradedButton onClick={() => markTraded(l.id, l.source)} />
-                        <DeleteButton onClick={() => deletePosting(l.id, l.source)} />
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <div className="flex items-center gap-2">
+                <span><strong>Tier:</strong> {currentUser.tier}</span>
+                {currentUser.tier === 'Limited' && (
+                  <Button className="bg-blue-600 hover:bg-blue-500" type="button" onClick={() => setShowUpgrade(true)}>Upgrade to Basic</Button>
+                )}
+              </div>
             </div>
           </Card>
         )}
@@ -1454,6 +1521,17 @@ export default function WTPInteractiveDiagram() {
         .slider::-webkit-slider-thumb { appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
         .slider::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #4f46e5; cursor: pointer; border: none; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
       `}</style>
+      {showUpgrade && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setShowUpgrade(false)}>
+          <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow" onClick={(e) => e.stopPropagation()}>
+            <h3 className="mb-2 text-lg font-semibold">Upgrade to Basic</h3>
+            <p className="text-sm text-gray-700">Venmo <span className="font-semibold">@payajb</span> <span className="font-semibold">$5</span> for a month of Basic.</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <GhostButton onClick={() => setShowUpgrade(false)}>Close</GhostButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

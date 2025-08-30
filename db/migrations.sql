@@ -9,6 +9,13 @@ create table if not exists public.events (
   created_at timestamptz not null default now()
 );
 
+-- Seed base events (safe to re-run)
+insert into public.events (id, label, type, price)
+values
+  ('usopen', 'US Open (Market Pricing)', 'market', null),
+  ('wp',     'White Party - Member Price $50', 'ceiling', 50)
+on conflict (id) do nothing;
+
 -- 2) Market postings (for price-based events like US Open)
 create table if not exists public.market_postings (
   id bigint generated always as identity primary key,
