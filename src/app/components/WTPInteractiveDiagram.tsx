@@ -5,7 +5,7 @@ import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { X, MessageCircle, Trophy, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, MessageCircle, Trophy, ChevronDown, ChevronUp, Users } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 
 /* =========================
@@ -52,7 +52,7 @@ const WeTradedButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
    Types & constants
    ========================= */
 type Role = 'buyer' | 'seller';
-type Tier = 'Limited' | 'Basic' | 'Pro' | 'Max';
+type Tier = 'Limited' | 'Basic';
 
 interface Profile {
   id: string;
@@ -66,12 +66,12 @@ interface Profile {
 }
 
 interface Posting {
-  id: string;          // DB id as string
-  userId: string;      // device_id (NOTE: table may also have user_id; not used here)
+  id: string;
+  userId: string;      // device_id
   eventId: string;     // event_id
-  role: Role;          // 'buyer' | 'seller'
+  role: Role;
   percent: number;     // 0..100
-  tickets: number;     // always 1
+  tickets: number;     // 1
   name: string;        // username
   phone: string;       // phone_e164
   cohort?: string;
@@ -84,10 +84,9 @@ interface ChatMessage {
   user_id: string;
   username: string;
   message: string;
-  created_at: string; // ISO string
+  created_at: string;
 }
 
-interface Comment { id: string; username: string; message: string; timestamp: Date; } // legacy (unused now)
 interface Trade {
   id: string;
   buyerName: string;
@@ -97,17 +96,16 @@ interface Trade {
   tickets: number;
   timestamp: Date;
 }
-
-const EVENTS = [
-  { id: 'rb', label: 'Red and Blue Ball - $60', price: 60 },
-  { id: 'wp', label: 'White Party - Member Price $50', price: 50 },
-] as const;
+type EventType = 'market' | 'ceiling';
+type EventItem = { id: string; label: string; type: EventType; price?: number };
+const BASE_EVENTS: EventItem[] = [
+  { id: 'usopen', label: 'US Open (Market Pricing)', type: 'market' },
+  { id: 'wp', label: 'White Party - Member Price $50', type: 'ceiling', price: 50 },
+];
 
 const TIER_INFO: Record<Tier, { price: string; features: string[] }> = {
-  Limited: { price: '$0/mo', features: ['Buy 1 and sell 1 at a time', 'Delete old posts to make new posts', 'See direct matches only', 'See 1-3 matches'] },
-  Basic:   { price: '$5/mo', features: ['Buy 2 and sell 2 at a time', 'Delete old posts to make new posts', 'See direct + closest matches within 10%'] },
-  Pro:     { price: '$10/mo', features: ['Buy 5 and sell 5 at a time', 'See direct matches and matches within 25%'] },
-  Max:     { price: '$15/mo', features: ['SMS instant alerts', 'Unlimited trades', 'Match with entire market'] },
+  Limited: { price: '$0/mo', features: ['Limited features', 'Show all eligible matches'] },
+  Basic:   { price: '$5/mo', features: ['Buy and sell 5 individual tickets at a time, match with entire market.'] },
 };
 
 const AREA_CODES: string[] = ['+1', '+44', '+61', '+81', '+82', '+91', '+33', '+49', '+39', '+34', '+86', '+971', '+65', '+852', '+353'];
@@ -136,6 +134,24 @@ const buildE164 = (code: string, digits: string): string => {
 const isValidE164 = (e164: string): boolean => /^\+\d{6,16}$/.test((e164 || '').trim());
 const normalizeVenmo = (h: string): string => (h || '').trim().replace(/^@/, '');
 const isValidVenmo = (h: string): boolean => /^[A-Za-z0-9_]{3,30}$/.test(normalizeVenmo(h));
+const copy = (text?: string) => text && navigator.clipboard?.writeText(text);
+
+// Market posting (price-based) for market-type events (e.g., US Open)
+interface MarketPosting {
+  id: string;
+  userId: string;      // device_id
+  eventId: string;     // event_id
+  role: Role;          // buyer or seller
+  price: number;       // explicit price
+  tickets: number;     // fixed 1
+  description: string; // free text
+  name: string;        // username
+  phone: string;       // phone_e164
+  cohort?: string;
+  venmo?: string;
+  email?: string;
+  created_at?: string;
+}
 
 /* =========================
    Component
@@ -143,6 +159,8 @@ const isValidVenmo = (h: string): boolean => /^[A-Za-z0-9_]{3,30}$/.test(normali
 export default function WTPInteractiveDiagram() {
   // DB-backed state
   const [postings, setPostings] = useState<Posting[]>([]);
+  const [marketPostings, setMarketPostings] = useState<MarketPosting[]>([]);
+  const [serverEvents, setServerEvents] = useState<EventItem[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
 
@@ -150,9 +168,10 @@ export default function WTPInteractiveDiagram() {
   const [authMode, setAuthMode] = useState<'signup' | 'login'>('signup');
   const [authError, setAuthError] = useState<string>('');
   const [openTier, setOpenTier] = useState<Tier | null>(null);
-  const [totalTradedTickets, setTotalTradedTickets] = useState<number>(11);
+  const [totalTradedTickets, setTotalTradedTickets] = useState<number>(17);
   const [newComment, setNewComment] = useState<string>('');
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [postNotice, setPostNotice] = useState<string>(''); // success banner
 
   // Auth fields
   const [username, setUsername] = useState<string>('');
@@ -164,17 +183,35 @@ export default function WTPInteractiveDiagram() {
   const [venmo, setVenmo] = useState<string>('');
   const [whartonEmail, setWhartonEmail] = useState<string>('');
 
-  // Posting fields
-  const [eventId, setEventId] = useState<(typeof EVENTS)[number]['id']>(EVENTS[0].id);
+  // Events and posting fields
+  const [extraEvents, setExtraEvents] = useState<EventItem[]>([]);
+  const allEvents = useMemo(() => {
+    // Merge server events first, then base, then any extra (legacy fallback)
+    const byId = new Map<string, EventItem>();
+    [...serverEvents, ...BASE_EVENTS, ...extraEvents].forEach(e => byId.set(e.id, e));
+    return Array.from(byId.values());
+  }, [serverEvents, extraEvents]);
+  // Default to WP for FOMO when logged out, else remember last
+  const [eventId, setEventId] = useState<string>('wp');
   const [role, setRole] = useState<Role>('buyer');
   const [percent, setPercent] = useState<number>(100);
+  const [marketDescription, setMarketDescription] = useState<string>('');
+  const [selectedMarketPrice, setSelectedMarketPrice] = useState<number | null>(120);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [adminUser, setAdminUser] = useState<string>('');
+  const [adminPass, setAdminPass] = useState<string>('');
+  const [newEventName, setNewEventName] = useState<string>('');
+  const [newEventType, setNewEventType] = useState<EventType>('market');
+  const [newEventPrice, setNewEventPrice] = useState<number>(50);
 
-  const currentEvent = useMemo(() => EVENTS.find((e) => e.id === eventId), [eventId]);
+  const currentEvent = useMemo(() => allEvents.find((e) => e.id === eventId), [allEvents, eventId]);
   const eventPrice = currentEvent?.price ?? 0;
 
   /* -------- Load session, profile, postings, chat; wire realtime -------- */
   useEffect(() => {
     let postsSub: ReturnType<typeof supabase.channel> | null = null;
+    let marketSub: ReturnType<typeof supabase.channel> | null = null;
+    let eventsSub: ReturnType<typeof supabase.channel> | null = null;
     let chatSub: ReturnType<typeof supabase.channel> | null = null;
 
     (async () => {
@@ -196,7 +233,7 @@ export default function WTPInteractiveDiagram() {
         }
       }
 
-      await Promise.all([refreshPostings(), refreshChat()]);
+      await Promise.all([refreshEvents(), refreshPostings(), refreshMarketPostings(), refreshChat()]);
 
       // Realtime: postings
       postsSub = supabase
@@ -227,6 +264,40 @@ export default function WTPInteractiveDiagram() {
             const r: any = payload.old;
             setPostings((prev) => prev.filter((p) => p.id !== String(r.id)));
           }
+        })
+        .subscribe();
+
+      // Realtime: market_postings
+      marketSub = supabase
+        .channel('market_postings_stream')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'market_postings' }, (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const r: any = payload.new;
+            setMarketPostings((prev) => {
+              const rest = prev.filter((p) => p.id !== String(r.id));
+              return [
+                ...rest,
+                {
+                  id: String(r.id), userId: r.device_id, eventId: r.event_id, role: r.role,
+                  price: Number(r.price) || 0, tickets: r.tickets ?? 1, description: r.description ?? '',
+                  name: r.username, phone: r.phone_e164, cohort: r.cohort ?? undefined,
+                  venmo: r.venmo_handle ?? undefined, email: r.email ?? r.email_address ?? undefined,
+                  created_at: r.created_at,
+                },
+              ];
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const r: any = payload.old;
+            setMarketPostings((prev) => prev.filter((p) => p.id !== String(r.id)));
+          }
+        })
+        .subscribe();
+
+      // Realtime: events
+      eventsSub = supabase
+        .channel('events_stream')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'events' }, async () => {
+          await refreshEvents();
         })
         .subscribe();
 
@@ -268,6 +339,8 @@ export default function WTPInteractiveDiagram() {
     return () => {
       authSub.subscription.unsubscribe();
       if (postsSub) supabase.removeChannel(postsSub);
+      if (marketSub) supabase.removeChannel(marketSub);
+      if (eventsSub) supabase.removeChannel(eventsSub);
       if (chatSub) supabase.removeChannel(chatSub);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -301,6 +374,37 @@ export default function WTPInteractiveDiagram() {
     }
   };
 
+  const refreshMarketPostings = async () => {
+    const { data, error } = await supabase
+      .from('market_postings')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) { console.error('Error fetching market postings:', error); return; }
+    if (data) {
+      setMarketPostings(
+        data.map((r: any) => ({
+          id: String(r.id), userId: r.device_id, eventId: r.event_id, role: r.role,
+          price: Number(r.price) || 0, tickets: r.tickets ?? 1, description: r.description ?? '',
+          name: r.username, phone: r.phone_e164, cohort: r.cohort ?? undefined,
+          venmo: r.venmo_handle ?? undefined, email: r.email ?? r.email_address ?? undefined,
+          created_at: r.created_at,
+        }))
+      );
+    }
+  };
+
+  const refreshEvents = async () => {
+    const { data, error } = await supabase
+      .from('events')
+      .select('*')
+      .order('created_at', { ascending: true });
+    if (error) { console.warn('events fetch error (fallback to base):', error.message); return; }
+    if (data) {
+      const items: EventItem[] = data.map((r: any) => ({ id: r.id, label: r.label, type: r.type, price: r.price ?? undefined }));
+      setServerEvents(items);
+    }
+  };
+
   const refreshChat = async () => {
     const { data, error } = await supabase
       .from('chat_messages')
@@ -324,7 +428,7 @@ export default function WTPInteractiveDiagram() {
     }
   };
 
-  /* -------- Signup: auth + profile update (trigger pre-creates) -------- */
+  /* -------- Signup -------- */
   const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setAuthError('');
@@ -338,7 +442,7 @@ export default function WTPInteractiveDiagram() {
     if (!isValidE164(phoneE164)) { setAuthError('Enter a valid phone number.'); return; }
 
     const venmoId = normalizeVenmo(venmo);
-    if (!isValidVenmo(venmoId)) { setAuthError('Enter a valid Venmo handle (3-30 chars, letters/numbers/_).'); return; }
+    if (!isValidVenmo(venmoId)) { setAuthError('Enter a valid Venmo handle (3-30 chars).'); return; }
 
     try {
       const { data: sign, error: signErr } = await supabase.auth.signUp({ email: whartonEmail.trim(), password });
@@ -372,7 +476,7 @@ export default function WTPInteractiveDiagram() {
     }
   };
 
-  /* -------- Login: email + password only -------- */
+  /* -------- Login -------- */
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setAuthError('');
@@ -407,14 +511,11 @@ export default function WTPInteractiveDiagram() {
   };
 
   /* -------- Posting helpers -------- */
-  const getTierLimits = (tier: Tier): { buy: number; sell: number } => {
-    switch (tier) {
-      case 'Basic': return { buy: 2, sell: 2 };
-      case 'Pro':   return { buy: 5, sell: 5 };
-      case 'Max':   return { buy: Number.POSITIVE_INFINITY, sell: Number.POSITIVE_INFINITY };
-      default:      return { buy: 1, sell: 1 };
-    }
-  };
+  // No limits for now (all tiers)
+  const getTierLimits = (_tier: Tier): { buy: number; sell: number } => ({
+    buy: Number.POSITIVE_INFINITY,
+    sell: Number.POSITIVE_INFINITY,
+  });
 
   const postIntent = async () => {
     if (!currentUser) { alert('Please sign in first.'); return; }
@@ -424,8 +525,8 @@ export default function WTPInteractiveDiagram() {
     const buyPosts = mine.filter((p) => p.role === 'buyer').length;
     const sellPosts = mine.filter((p) => p.role === 'seller').length;
 
-    if (role === 'buyer' && buyPosts >= limits.buy) { alert(`Your ${currentUser.tier} tier allows only ${limits.buy} buy post(s). Delete old posts to make new ones.`); return; }
-    if (role === 'seller' && sellPosts >= limits.sell) { alert(`Your ${currentUser.tier} tier allows only ${limits.sell} sell post(s). Delete old posts to make new ones.`); return; }
+    if (role === 'buyer' && buyPosts >= limits.buy) { alert(`Posting limit reached.`); return; }
+    if (role === 'seller' && sellPosts >= limits.sell) { alert(`Posting limit reached.`); return; }
 
     const row = {
       device_id: getDeviceId(),
@@ -469,49 +570,93 @@ export default function WTPInteractiveDiagram() {
           ...rest,
         ];
       });
+
+      // success banner
+      setPostNotice('Success! Your post is on the market. Scroll to bottom to delete old posts');
+      setTimeout(() => setPostNotice(''), 5000);
     } catch (err: any) {
       console.error('Post creation error:', err);
       alert(`Post failed: ${err.message || 'Unknown error'}`);
     }
   };
 
-  const deletePosting = async (id: string) => {
+  const deletePosting = async (id: string, source: 'ceiling' | 'market' = 'ceiling') => {
     try {
-      const { error } = await supabase.from('postings_public').delete().eq('id', id);
-      if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
-      else { setPostings((prev) => prev.filter((p) => p.id !== id)); }
+      if (source === 'market') {
+        const { error } = await supabase.from('market_postings').delete().eq('id', id);
+        if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
+        else { setMarketPostings((prev) => prev.filter((p) => p.id !== id)); }
+      } else {
+        const { error } = await supabase.from('postings_public').delete().eq('id', id);
+        if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
+        else { setPostings((prev) => prev.filter((p) => p.id !== id)); }
+      }
     } catch (err: any) {
       console.error('Delete error:', err);
       alert(`Delete failed: ${err.message || 'Unknown error'}`);
     }
   };
 
-  const markTraded = (id: string) => {
-    const posting = postings.find((p) => p.id === id);
-    if (posting) { setTotalTradedTickets((prev) => prev + posting.tickets); deletePosting(id); }
+  const markTraded = async (id: string, source: 'ceiling' | 'market' = 'ceiling') => {
+    if (source === 'market') {
+      const posting = marketPostings.find((p) => p.id === id);
+      if (posting) {
+        try { await supabase.rpc('tm_mark_traded', { p_posting_id: id, p_source: 'market' }); } catch {}
+        setTotalTradedTickets((prev) => prev + posting.tickets);
+        deletePosting(id, 'market');
+      }
+    } else {
+      const posting = postings.find((p) => p.id === id);
+      if (posting) {
+        try { await supabase.rpc('tm_mark_traded', { p_posting_id: id, p_source: 'ceiling' }); } catch {}
+        setTotalTradedTickets((prev) => prev + posting.tickets);
+        deletePosting(id, 'ceiling');
+      }
+    }
   };
 
-  /* -------- Live chat (DB) -------- */
+  /* -------- Live chat: insert a message and optimistically append -------- */
   const addComment = async () => {
-    if (!currentUser) return;
+    if (!currentUser) { alert('Please sign in first.'); return; }
+
     const msg = (newComment || '').trim();
     if (!msg) return;
     if (msg.length > 250) { alert('Max 250 characters'); return; }
 
-    const { error } = await supabase.from('chat_messages').insert({
+    const optimistic: ChatMessage = {
+      id: `tmp_${Date.now()}`,
       user_id: currentUser.id,
       username: currentUser.username,
       message: msg,
-    });
+      created_at: new Date().toISOString(),
+    };
+
+    setChat((prev) => [optimistic, ...prev].slice(0, 200));
+    setNewComment('');
+
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .insert({
+        user_id: currentUser.id,
+        username: currentUser.username,
+        message: msg,
+      })
+      .select()
+      .single();
+
     if (error) {
-      console.error('Chat insert error:', error);
+      setChat((prev) => prev.filter((m) => m.id !== optimistic.id));
       alert(`Message failed: ${error.message}`);
       return;
     }
-    setNewComment('');
+
+    setChat((prev) => [
+      { ...optimistic, id: String(data.id), created_at: data.created_at },
+      ...prev.filter((m) => m.id !== optimistic.id),
+    ]);
   };
 
-  /* -------- Matches (computed) -------- */
+  /* -------- Matches (all eligible; no tier filtering) -------- */
   type Match = { me: Posting; other: Posting; agreedPct: number; tickets: number };
   const getMatches = (): Match[] => {
     if (!currentUser) return [];
@@ -524,15 +669,8 @@ export default function WTPInteractiveDiagram() {
         : (me.role === 'seller' && o.role === 'buyer') ? o.percent >= me.percent
         : false
       );
-      if (!compatible.length) continue;
-      let filtered = compatible;
-      if (currentUser.tier === 'Limited') filtered = compatible.filter((o) => Math.abs(me.percent - o.percent) === 0);
-      else if (currentUser.tier === 'Basic') filtered = compatible.filter((o) => Math.abs(me.percent - o.percent) <= 10);
-      else if (currentUser.tier === 'Pro') filtered = compatible.filter((o) => Math.abs(me.percent - o.percent) <= 25);
-      const maxMatches = currentUser.tier === 'Limited' ? 3 : currentUser.tier === 'Basic' ? 5 : currentUser.tier === 'Pro' ? 10 : Infinity;
-      filtered
+      compatible
         .sort((a, b) => Math.abs(me.percent - a.percent) - Math.abs(me.percent - b.percent))
-        .slice(0, maxMatches)
         .forEach((other) =>
           out.push({ me, other, agreedPct: Math.min(me.percent, other.percent), tickets: Math.min(me.tickets, other.tickets) })
         );
@@ -540,14 +678,58 @@ export default function WTPInteractiveDiagram() {
     return out;
   };
 
-  const myMatches = getMatches();
-  const myListings = currentUser ? postings.filter((p) => p.name === currentUser.username) : [];
+  // Market (price-based) matches
+  type MarketMatch = { me: MarketPosting; other: MarketPosting; agreedPrice: number; tickets: number };
+  const getMarketMatches = (): MarketMatch[] => {
+    if (!currentUser) return [];
+    const mine = marketPostings.filter((p) => p.name === currentUser.username && p.eventId === eventId);
+    const others = marketPostings.filter((p) => p.name !== currentUser.username && p.eventId === eventId);
+    const out: MarketMatch[] = [];
+    for (const me of mine) {
+      const compatible = others.filter((o) => (me.role === 'buyer' && o.role === 'seller') || (me.role === 'seller' && o.role === 'buyer'));
+      compatible
+        .sort((a, b) => Math.abs(me.price - a.price) - Math.abs(me.price - b.price))
+        .forEach((other) => {
+          const tickets = Math.min(me.tickets, other.tickets);
+          const agreedPrice = Math.round(((me.price + other.price) / 2) * 100) / 100;
+          out.push({ me, other, agreedPrice, tickets });
+        });
+    }
+    return out;
+  };
 
-  /* -------- Market charts derived from live postings -------- */
+  const myMatches = currentEvent?.type === 'market' ? [] : getMatches();
+  const myMarketMatches = currentEvent?.type === 'market' ? getMarketMatches() : [];
+
+  type ListingItem = (
+    { source: 'ceiling'; id: string; label: string; role: Role; percent: number; tickets: number } |
+    { source: 'market';  id: string; label: string; role: Role; price: number;  tickets: number }
+  );
+  const myListings: ListingItem[] = useMemo(() => {
+    if (!currentUser) return [] as ListingItem[];
+    const a: ListingItem[] = postings
+      .filter(p => p.name === currentUser.username)
+      .map(p => ({ source: 'ceiling' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, percent: p.percent, tickets: p.tickets }));
+    const b: ListingItem[] = marketPostings
+      .filter(p => p.name === currentUser.username)
+      .map(p => ({ source: 'market' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, price: p.price, tickets: p.tickets }));
+    return [...b, ...a];
+  }, [currentUser, postings, marketPostings, allEvents]);
+
+  /* -------- Market options (for market-type events) -------- */
+  // For US Open – draw real circles from market postings (no fakes)
+  type MarketPoint = { price: number; role: Role; label: string; username: string };
+  const marketPoints: MarketPoint[] = useMemo(() => {
+    return marketPostings
+      .filter(p => p.eventId === eventId)
+      .map(p => ({ price: p.price, role: p.role, label: (p.description || '').trim(), username: p.name }));
+  }, [marketPostings, eventId]);
+
+  /* -------- Market charts -------- */
   const filtered = useMemo(() => postings.filter(p => p.eventId === eventId), [postings, eventId]);
+  const marketFiltered = useMemo(() => marketPostings.filter(p => p.eventId === eventId), [marketPostings, eventId]);
 
   const marketDistribution = useMemo(() => {
-    // Buckets that match your original labels
     const buckets = ['50-60%', '60-70%', '70-80%', '80-90%', '90-100%', '100%'] as const;
     const rangeFor = (pct: number): typeof buckets[number] | null => {
       if (pct === 100) return '100%';
@@ -567,13 +749,10 @@ export default function WTPInteractiveDiagram() {
       if (p.role === 'seller') slot.seller += 1;
       else slot.buyer += 1;
     }
-    // negative for sellers so bars go left
     return buckets.map(b => ({ bucket: b, seller: -(acc.get(b)!.seller), buyer: acc.get(b)!.buyer }));
   }, [filtered]);
 
   const supplyDemand = useMemo(() => {
-    // Supply at price p: sellers with percent <= p
-    // Demand at price p: buyers with percent >= p
     const sellers = filtered.filter(p => p.role === 'seller').map(p => p.percent).sort((a, b) => a - b);
     const buyers  = filtered.filter(p => p.role === 'buyer').map(p => p.percent).sort((a, b) => a - b);
     const points: { p: number; supply: number; demand: number }[] = [];
@@ -585,7 +764,6 @@ export default function WTPInteractiveDiagram() {
     return points;
   }, [filtered]);
 
-  // crude clearing price = first p where supply >= demand
   const clearing = useMemo(() => {
     for (const pt of supplyDemand) { if (pt.supply >= pt.demand) return pt.p; }
     return 0;
@@ -600,19 +778,23 @@ export default function WTPInteractiveDiagram() {
           <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
           <div className="mt-2 flex items-center gap-4">
             <p className="flex-1 text-gray-700">
-              Buy and resell Wharton tickets at face value or lower. Create an account with your name and post your bid/ask.
+              Buy and resell Wharton tickets at face value or lower. Create an account with your email and post your bid/ask.
             </p>
-            <div className="flex items-center gap-2 text-sm">
-              <Trophy className="text-yellow-500" size={20} />
-              <span className="font-semibold">{totalTradedTickets}</span>
-              <span className="text-gray-600">tickets traded</span>
+            <div className="flex items-center gap-4 text-base sm:text-lg">
+              <Trophy className="text-yellow-500" size={24} />
+              <span className="font-extrabold text-2xl">{totalTradedTickets}</span>
+              <span className="text-gray-700">tickets traded</span>
+              <span className="mx-2 h-5 w-px bg-gray-300" />
+              <Users className="text-indigo-600" size={22} />
+              <span className="font-extrabold text-2xl">63</span>
+              <span className="text-gray-700">active accounts</span>
             </div>
           </div>
         </div>
 
-        {/* Tier dropdowns (brought back) */}
+        {/* Tier dropdowns */}
         <Card className="mb-6 p-5">
-          <SectionTitle title="Membership Tiers" subtitle="What you get at each level" />
+          <SectionTitle title="Membership Tiers" subtitle="Limited and Basic available" />
           <div className="space-y-3">
             {(Object.keys(TIER_INFO) as Tier[]).map(tier => {
               const open = openTier === tier;
@@ -649,7 +831,7 @@ export default function WTPInteractiveDiagram() {
             {authMode === 'signup' ? (
               <form onSubmit={handleSignup} className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div className="md:col-span-2">
-                  <Label>Username (First Last)</Label>
+                  <Label>Name (First Last)</Label>
                   <Input placeholder="Joe Wharton" value={username} onChange={(e) => setUsername(e.target.value)} required />
                 </div>
                 <div>
@@ -722,7 +904,7 @@ export default function WTPInteractiveDiagram() {
 
         {/* Main Grid */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-          {/* LEFT: Inputs & Matches */}
+          {/* LEFT: Inputs */}
           <Card className="p-5 lg:col-span-1">
             <SectionTitle title="Your Inputs" />
             {currentUser ? (
@@ -735,7 +917,7 @@ export default function WTPInteractiveDiagram() {
                   <Label>Phone</Label>
                   <div className="flex items-center">
                     <Input value={currentUser.phone_e164} readOnly className="flex-1" />
-                    <button onClick={() => navigator.clipboard?.writeText(currentUser.phone_e164)} className="ml-2 rounded bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200" type="button">
+                    <button onClick={() => copy(currentUser.phone_e164)} className="ml-2 rounded bg-gray-100 px-2 py-1 text-xs hover:bg-gray-200" type="button">
                       Copy
                     </button>
                   </div>
@@ -749,136 +931,367 @@ export default function WTPInteractiveDiagram() {
                 </div>
                 <div>
                   <Label>Event</Label>
-                  <Select value={eventId} onChange={(e) => setEventId(e.target.value as (typeof EVENTS)[number]['id'])}>
-                    {EVENTS.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
+                  <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
+                    {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
                   </Select>
                 </div>
-                <div>
-                  <Label>Percent (%) of Ticket Value</Label>
-                  <div className="mt-2">
-                    <input
-                      type="range"
-                      min={0}
-                      max={100}
-                      value={percent}
-                      onChange={(e) => setPercent(Number(e.target.value))}
-                      className="slider h-3 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
-                      style={{ background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${percent}%, #e5e7eb ${percent}%, #e5e7eb 100%)` }}
-                    />
-                    <div className="mt-1 flex justify-between text-xs text-gray-500">
-                      <span>0%</span><span className="font-semibold text-indigo-600">{percent}%</span><span>100%</span>
+                {currentEvent?.type === 'ceiling' && (
+                  <div>
+                    <Label>Percent (%) of Ticket Value</Label>
+                    <div className="mt-2">
+                      <input
+                        type="range"
+                        min={0}
+                        max={100}
+                        value={percent}
+                        onChange={(e) => setPercent(Number(e.target.value))}
+                        className="slider h-3 w-full cursor-pointer appearance-none rounded-lg bg-gray-200"
+                        style={{ background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${percent}%, #e5e7eb ${percent}%, #e5e7eb 100%)` }}
+                      />
+                      <div className="mt-1 flex justify-between text-xs text-gray-500">
+                        <span>0%</span><span className="font-semibold text-indigo-600">{percent}%</span><span>100%</span>
+                      </div>
                     </div>
                   </div>
-                </div>
+                )}
+                {currentEvent?.type === 'market' && (
+                  <>
+                    <div>
+                      <Label>Price ($)</Label>
+                      <Input type="number" min={1} step={1} value={selectedMarketPrice ?? ''}
+                        onChange={(e) => setSelectedMarketPrice(Number(e.target.value))} placeholder="120" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Description</Label>
+                      <Input placeholder="Row 70, Thursday night" value={marketDescription} onChange={(e) => setMarketDescription(e.target.value)} />
+                      <div className="text-xs text-gray-500">Price is a hard number; description helps others assess.</div>
+                    </div>
+                  </>
+                )}
                 <div>
                   <Label>Number of Tickets</Label>
                   <Input value="1" readOnly className="bg-gray-50" />
                   <p className="mt-1 text-xs text-gray-500">Fixed at 1 ticket per post</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Button type="button" onClick={postIntent}>Post</Button>
-                </div>
-
-                <div className="pt-2">
-                  <SectionTitle title="Matches" subtitle="Your tier determines match visibility and range." />
-                  {myMatches.length === 0 ? (
-                    <div className="text-sm text-gray-400">No matches yet</div>
+                <div className="flex flex-col gap-2">
+                  {currentEvent?.type === 'ceiling' ? (
+                    <Button type="button" onClick={postIntent}>Post</Button>
                   ) : (
-                    <div className="max-h-64 space-y-3 overflow-auto text-sm">
-                      {myMatches.slice(0, 10).map((m, i) => {
-                        const buyer = m.me.role === 'buyer' ? m.me : m.other;
-                        const seller = m.me.role === 'seller' ? m.me : m.other;
-                        const agreedPct = m.agreedPct;
-                        return (
-                          <div key={i} className="rounded-lg border bg-gray-50 p-3">
-                            <div className="mb-2 flex items-center justify-between font-semibold">
-                              <span>{seller.name} ↔ {buyer.name} at {agreedPct}%</span>
-                              <WeTradedButton onClick={() => {
-                                setTrades((prev) => [...prev, {
-                                  id: Math.random().toString(36),
-                                  buyerName: buyer.name,
-                                  sellerName: seller.name,
-                                  eventId,
-                                  price: (agreedPct / 100) * eventPrice,
-                                  tickets: Math.min(m.me.tickets, m.other.tickets),
-                                  timestamp: new Date(),
-                                }]);
-                                setTotalTradedTickets((prev) => prev + 1);
-                              }} />
-                            </div>
-                            <div className="grid grid-cols-2 gap-2 text-xs text-gray-700">
-                              <div><div className="font-semibold">Seller</div><div>Name: {seller.name}</div><div className="flex items-center gap-1">Phone: {seller.phone}</div></div>
-                              <div><div className="font-semibold">Buyer</div><div>Name: {buyer.name}</div><div className="flex items-center gap-1">Phone: {buyer.phone}</div></div>
-                            </div>
-                            <div className="mt-1 text-right text-xs text-gray-500">@ {toMoney((agreedPct / 100) * eventPrice)}</div>
-                          </div>
-                        );
-                      })}
+                    <Button
+                      type="button"
+                      onClick={async () => {
+                        if (!currentUser) { alert('Please sign in first.'); return; }
+                        const desc = (marketDescription || '').trim();
+                        const price = Number(selectedMarketPrice);
+                        if (!price || price <= 0) { alert('Enter a valid price'); return; }
+                        if (!desc) { alert('Please add a short description'); return; }
+                        try {
+                          const row = {
+                            device_id: getDeviceId(),
+                            event_id: eventId,
+                            role,
+                            price,
+                            tickets: 1,
+                            description: desc,
+                            username: currentUser.username,
+                            phone_e164: currentUser.phone_e164,
+                            cohort: currentUser.cohort,
+                            venmo_handle: currentUser.venmo_handle,
+                            email: currentUser.wharton_email,
+                          };
+                          const { data, error } = await supabase.from('market_postings').insert(row).select().single();
+                          if (error) { alert(`Post failed: ${error.message}`); return; }
+                          if (data) {
+                            setMarketPostings((prev) => ([
+                              {
+                                id: String(data.id), userId: data.device_id, eventId: data.event_id, role: data.role,
+                                price: Number(data.price)||0, tickets: data.tickets ?? 1, description: data.description ?? '',
+                                name: data.username, phone: data.phone_e164, cohort: data.cohort ?? undefined,
+                                venmo: data.venmo_handle ?? undefined, email: data.email ?? undefined,
+                                created_at: data.created_at,
+                              },
+                              ...prev,
+                            ]));
+                            setPostNotice('Success! Your ticket is live.');
+                            setTimeout(() => setPostNotice(''), 5000);
+                            setMarketDescription('');
+                          }
+                        } catch (e: any) {
+                          alert(`Failed to post: ${e?.message || 'Unknown error'}`);
+                        }
+                      }}
+                    >
+                      Post
+                    </Button>
+                  )}
+                  {postNotice && (
+                    <div className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
+                      {postNotice}
                     </div>
                   )}
                 </div>
+
+                {/* Matches moved to its own card below */}
               </div>
             ) : (
               <div className="text-sm text-gray-500">Sign in to enter your inputs and see matches.</div>
             )}
           </Card>
 
-          {/* MIDDLE: Charts (now live) */}
-          <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
-            <Card className="p-5">
-              <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} — left bars = sellers, right bars = buyers`} />
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={marketDistribution} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis type="number" domain={[-20, 20]} tickFormatter={(v) => Math.abs(Number(v)).toString()} />
-                    <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
-                    <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
-                    <Legend />
-                    <Bar dataKey="seller" name="Sellers" fill="#6366F1" />
-                    <Bar dataKey="buyer"  name="Buyers"  fill="#10B981" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-              {filtered.length === 0 && <div className="mt-2 text-xs text-gray-500">No postings yet for this event.</div>}
-            </Card>
+          {/* Matches: Make wide on desktop for readability */}
+          <Card className="p-5 lg:col-span-3">
+            <SectionTitle title="Matches" subtitle="All closest matches by price/percent" />
+            {!currentUser ? (
+              <div className="text-sm text-gray-400">Sign in to see your matches.</div>
+            ) : currentEvent?.type === 'market' ? (
+              (() => {
+                const mm = myMarketMatches;
+                if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
+                return (
+                  <div className="max-h-64 space-y-3 overflow-auto text-sm">
+                    {mm.slice(0, 50).map((m, i) => {
+                      const buyer = m.me.role === 'buyer' ? m.me : m.other;
+                      const seller = m.me.role === 'seller' ? m.me : m.other;
+                      return (
+                        <div key={i} className="rounded-lg border bg-gray-50 p-3">
+                          <div className="mb-2 flex items-center justify-between font-semibold">
+                            <span>{seller.name} ↔ {buyer.name} at ${m.agreedPrice}</span>
+                            <WeTradedButton onClick={async () => {
+                              try {
+                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: 1 });
+                              } catch {}
+                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: 1, timestamp: new Date() }]);
+                              setTotalTradedTickets((prev) => prev + 1);
+                            }} />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 text-xs text-gray-700">
+                            <div>
+                              <div className="font-semibold mb-1">Seller</div>
+                              <div className="flex justify-between"><span className="text-gray-500">Name:</span><span>{seller.name}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Phone:</span><span>{seller.phone}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Email:</span><span>{seller.email}</span></div>
+                            </div>
+                            <div>
+                              <div className="font-semibold mb-1">Buyer</div>
+                              <div className="flex justify-between"><span className="text-gray-500">Name:</span><span>{buyer.name}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Phone:</span><span>{buyer.phone}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Email:</span><span>{buyer.email}</span></div>
+                            </div>
+                          </div>
+                          <div className="mt-1 text-right text-xs text-gray-500">@ {toMoney(m.agreedPrice)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()
+            ) : (
+              (() => {
+                const mm = myMatches;
+                if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
+                return (
+                  <div className="max-h-64 space-y-3 overflow-auto text-sm">
+                    {mm.slice(0, 50).map((m, i) => {
+                      const buyer = m.me.role === 'buyer' ? m.me : m.other;
+                      const seller = m.me.role === 'seller' ? m.me : m.other;
+                      const agreedPct = m.agreedPct;
+                      return (
+                        <div key={i} className="rounded-lg border bg-gray-50 p-3">
+                          <div className="mb-2 flex items-center justify-between font-semibold">
+                            <span>{seller.name} ↔ {buyer.name} at {agreedPct}%</span>
+                            <WeTradedButton onClick={async () => {
+                              try {
+                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: 1 });
+                              } catch {}
+                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: 1, timestamp: new Date() }]);
+                              setTotalTradedTickets((prev) => prev + 1);
+                            }} />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 text-xs text-gray-700">
+                            <div>
+                              <div className="font-semibold mb-1">Seller</div>
+                              <div className="flex justify-between"><span className="text-gray-500">Name:</span><span>{seller.name}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Phone:</span><span>{seller.phone}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Email:</span><span>{seller.email}</span></div>
+                            </div>
+                            <div>
+                              <div className="font-semibold mb-1">Buyer</div>
+                              <div className="flex justify-between"><span className="text-gray-500">Name:</span><span>{buyer.name}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Phone:</span><span>{buyer.phone}</span></div>
+                              <div className="flex justify-between"><span className="text-gray-500">Email:</span><span>{buyer.email}</span></div>
+                            </div>
+                          </div>
+                          <div className="mt-1 text-right text-xs text-gray-500">@ {toMoney((agreedPct/100)*eventPrice)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()
+            )}
+          </Card>
 
-            <Card className="p-5">
-              <SectionTitle title="Supply vs Demand" subtitle="Calculated from current postings" />
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                <div className="lg:col-span-2">
-                  <div className="h-72">
+          {/* MIDDLE: Charts */}
+          <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
+            {currentEvent?.type === 'ceiling' ? (
+              <>
+                <Card className="p-5">
+                  <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} — left bars = sellers, right bars = buyers`} />
+                  <div className="h-80">
                     <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={supplyDemand} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                      <BarChart data={marketDistribution} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
                         <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="p" tickFormatter={(v) => `${v}%`} />
-                        <YAxis allowDecimals={false} />
-                        <Tooltip labelFormatter={(label) => `Price: ${label}%`} />
+                        <XAxis type="number" domain={[-20, 20]} tickFormatter={(v) => Math.abs(Number(v)).toString()} />
+                        <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
+                        <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
                         <Legend />
-                        <ReferenceLine x={clearing} stroke="#EF4444" strokeDasharray="5 3" label={`p* = ${clearing}%`} />
-                        <Line type="monotone" dataKey="supply" name="Supply (sellers ≤ p)" stroke="#6366F1" dot={false} />
-                        <Line type="monotone" dataKey="demand" name="Demand (buyers ≥ p)" stroke="#10B981" dot={false} />
-                      </LineChart>
+                        <Bar dataKey="seller" name="Sellers" fill="#6366F1" />
+                        <Bar dataKey="buyer"  name="Buyers"  fill="#10B981" />
+                      </BarChart>
                     </ResponsiveContainer>
                   </div>
+                  {filtered.length === 0 && <div className="mt-2 text-xs text-gray-500">No postings yet for this event.</div>}
+                </Card>
+
+                <Card className="p-5">
+                  <SectionTitle title="Supply vs Demand" subtitle="Calculated from current postings" />
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                    <div className="lg:col-span-2">
+                      <div className="h-72">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={supplyDemand} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="p" tickFormatter={(v) => `${v}%`} />
+                            <YAxis allowDecimals={false} />
+                            <Tooltip labelFormatter={(label) => `Price: ${label}%`} />
+                            <Legend />
+                            <ReferenceLine x={clearing} stroke="#EF4444" strokeDasharray="5 3" label={`p* = ${clearing}%`} />
+                            <Line type="monotone" dataKey="supply" name="Supply (sellers ≤ p)" stroke="#6366F1" dot={false} />
+                            <Line type="monotone" dataKey="demand" name="Demand (buyers ≥ p)" stroke="#10B981" dot={false} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                    <div className="grid content-start gap-3 lg:col-span-1">
+                      <Card className="p-4">
+                        <div className="text-sm text-gray-500">Clearing Price</div>
+                        <div className="text-2xl font-bold">{clearing}%</div>
+                        <div className="text-sm text-gray-600">≈ {toMoney(eventPrice * (clearing / 100))}</div>
+                      </Card>
+                      <Card className="p-4">
+                        <div className="text-sm text-gray-500">Active Buyers</div>
+                        <div className="text-2xl font-bold">{filtered.filter(p => p.role === 'buyer').length}</div>
+                      </Card>
+                      <Card className="p-4">
+                        <div className="text-sm text-gray-500">Active Sellers</div>
+                        <div className="text-2xl font-bold">{filtered.filter(p => p.role === 'seller').length}</div>
+                      </Card>
+                    </div>
+                  </div>
+                </Card>
+              </>
+            ) : (
+              <>
+              <Card className="p-5">
+                <SectionTitle title="Market Options" subtitle="Discrete supply (sellers) and demand (buyers) at price; hover for details" />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <div className="lg:col-span-2">
+                    <div className="h-72">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
+                          <line x1="5" y1="80" x2="95" y2="80" stroke="#d1d5db" strokeWidth="1" />
+                          {/* price ticks every $20 from min..max */}
+                          {(() => {
+                            const prices = marketPoints.map(p => p.price);
+                            const min = prices.length ? Math.min(...prices) : 60;
+                            const max = prices.length ? Math.max(...prices) : 200;
+                            const lo = Math.floor(min / 20) * 20;
+                            const hi = Math.ceil(max / 20) * 20;
+                            const ticks = [] as number[];
+                            for (let v = lo; v <= hi; v += 20) ticks.push(v);
+                            return (
+                              <g>
+                                {ticks.map((v, i) => {
+                                  const x = 5 + ((v - lo) / Math.max(1, (hi - lo))) * 90;
+                                  return (
+                                    <g key={i}>
+                                      <line x1={x} y1={80} x2={x} y2={82} stroke="#9ca3af" strokeWidth="0.5" />
+                                      <text x={x} y={86} textAnchor="middle" fontSize="3" fill="#6b7280">${v}</text>
+                                    </g>
+                                  );
+                                })}
+                              </g>
+                            );
+                          })()}
+                          {/* circles */}
+                          {(() => {
+                            const prices = marketPoints.map(p => p.price);
+                            const min = prices.length ? Math.min(...prices) : 60;
+                            const max = prices.length ? Math.max(...prices) : 200;
+                            return marketPoints.map((pt, idx) => {
+                              const x = 5 + ((pt.price - Math.min(min, pt.price)) / Math.max(1, (Math.max(max, pt.price) - Math.min(min, pt.price)))) * 90;
+                              const y = 78 - ((idx % 4) * 8); // small vertical staggering
+                              const fill = pt.role === 'seller' ? '#6366F1' : '#10B981';
+                              const stroke = pt.role === 'seller' ? '#4338CA' : '#059669';
+                              const selected = selectedMarketPrice === pt.price;
+                              return (
+                                <g key={idx} onClick={() => setSelectedMarketPrice(pt.price)} style={{ cursor: 'pointer' }}>
+                                  <circle cx={x} cy={y} r={selected ? 5 : 4} fill={fill} stroke={stroke} strokeWidth={selected ? 2 : 1}>
+                                    <title>{pt.username}: ${pt.price}\n{pt.label || '(no description)'}</title>
+                                  </circle>
+                                </g>
+                              );
+                            });
+                          })()}
+                        </svg>
+                      </ResponsiveContainer>
+                    </div>
+                    <div className="mt-2 text-xs text-gray-500">Click a circle to set the price input above</div>
+                  </div>
+                  <div className="grid content-start gap-3 lg:col-span-1">
+                    <Card className="p-4">
+                      <div className="text-sm text-gray-500">Selected Price</div>
+                      <div className="text-2xl font-bold">{selectedMarketPrice ? `$${selectedMarketPrice}` : '—'}</div>
+                    </Card>
+                    <Card className="p-4">
+                      <div className="text-sm text-gray-500">Counts</div>
+                      <div className="text-sm text-gray-700 space-y-1">
+                        <div className="flex items-center justify-between"><span>Buyers</span><span>{marketFiltered.filter(p => p.role==='buyer').length}</span></div>
+                        <div className="flex items-center justify-between"><span>Sellers</span><span>{marketFiltered.filter(p => p.role==='seller').length}</span></div>
+                      </div>
+                    </Card>
+                  </div>
                 </div>
-                <div className="grid content-start gap-3 lg:col-span-1">
-                  <Card className="p-4">
-                    <div className="text-sm text-gray-500">Clearing Price</div>
-                    <div className="text-2xl font-bold">{clearing}%</div>
-                    <div className="text-sm text-gray-600">≈ {toMoney(eventPrice * (clearing / 100))}</div>
-                  </Card>
-                  <Card className="p-4">
-                    <div className="text-sm text-gray-500">Active Buyers</div>
-                    <div className="text-2xl font-bold">{filtered.filter(p => p.role === 'buyer').length}</div>
-                  </Card>
-                  <Card className="p-4">
-                    <div className="text-sm text-gray-500">Active Sellers</div>
-                    <div className="text-2xl font-bold">{filtered.filter(p => p.role === 'seller').length}</div>
-                  </Card>
+              </Card>
+
+              <Card className="p-5">
+                <SectionTitle title="Average Price" subtitle="Simple average across recent postings (market events)" />
+                <div className="h-60">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={(() => {
+                      const data = marketFiltered.slice().reverse();
+                      const buckets: Record<string, { sum: number; n: number }> = {};
+                      for (const r of data) {
+                        const t = r.created_at ? new Date(r.created_at) : new Date();
+                        const key = `${t.getFullYear()}-${t.getMonth()+1}-${t.getDate()} ${t.getHours()}:00`;
+                        if (!buckets[key]) buckets[key] = { sum: 0, n: 0 };
+                        buckets[key].sum += r.price; buckets[key].n += 1;
+                      }
+                      return Object.entries(buckets).sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>({ t:k, avg: Math.round((v.sum/v.n)*100)/100 }));
+                    })()} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="t" tick={{ fontSize: 10 }} />
+                      <YAxis allowDecimals={true} />
+                      <Tooltip />
+                      <Legend />
+                      <Line type="monotone" dataKey="avg" name="Avg Price" stroke="#4f46e5" dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
                 </div>
-              </div>
-            </Card>
+                {marketFiltered.length === 0 && <div className="mt-2 text-xs text-gray-500">No postings yet for this event.</div>}
+              </Card>
+              </>
+            )}
           </div>
 
           {/* RIGHT: Chat (live) */}
@@ -914,13 +1327,96 @@ export default function WTPInteractiveDiagram() {
           </Card>
         </div>
 
+        {/* Admin */}
+        <Card className="mt-6 p-5">
+          <SectionTitle title="Admin" subtitle="Seed new events (market or ceiling pricing)" />
+          {!isAdmin ? (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div>
+                <Label>Username</Label>
+                <Input value={adminUser} onChange={(e) => setAdminUser(e.target.value)} placeholder="admin" />
+              </div>
+              <div>
+                <Label>Password</Label>
+                <Input type="password" value={adminPass} onChange={(e) => setAdminPass(e.target.value)} placeholder="••••••••" />
+              </div>
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const { data, error } = await supabase.rpc('tm_admin_login', { p_username: adminUser, p_password: adminPass });
+                      if (error) { alert(`Login failed: ${error.message}`); return; }
+                      if (data && data.ok) setIsAdmin(true); else alert('Invalid admin credentials');
+                    } catch (e: any) {
+                      alert('Admin RPC not configured. See db/migrations.sql');
+                    }
+                  }}
+                >
+                  Sign In
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+              <div className="md:col-span-2">
+                <Label>Event Name</Label>
+                <Input value={newEventName} onChange={(e) => setNewEventName(e.target.value)} placeholder="Event name" />
+              </div>
+              <div>
+                <Label>Type</Label>
+                <Select value={newEventType} onChange={(e) => setNewEventType(e.target.value as any)}>
+                  <option value="market">Market pricing (US Open)</option>
+                  <option value="ceiling">Ceiling pricing (White Party)</option>
+                </Select>
+              </div>
+              {newEventType === 'ceiling' && (
+                <div>
+                  <Label>Member Price ($)</Label>
+                  <Input type="number" value={newEventPrice} onChange={(e) => setNewEventPrice(Number(e.target.value))} />
+                </div>
+              )}
+              <div className="flex items-end">
+                <Button
+                  type="button"
+                  onClick={async () => {
+                    const name = newEventName.trim();
+                    if (!name) { alert('Enter an event name'); return; }
+                    const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `evt-${Date.now()}`;
+                    if ([...allEvents].some(e => e.id === id)) { alert('Event with similar name already exists'); return; }
+                    try {
+                      const label = newEventType === 'market' ? `${name} (Market Pricing)` : `${name} - Member Price $${newEventPrice}`;
+                      const priceVal = newEventType === 'market' ? null : newEventPrice;
+                      const { error } = await supabase.rpc('tm_create_event', {
+                        p_username: adminUser,
+                        p_password: adminPass,
+                        p_id: id,
+                        p_label: label,
+                        p_type: newEventType,
+                        p_price: priceVal,
+                      });
+                      if (error) { alert(`Failed to add event: ${error.message}`); return; }
+                      await refreshEvents();
+                      setNewEventName('');
+                    } catch (e: any) {
+                      alert('tm_create_event RPC not configured. See db/migrations.sql');
+                    }
+                  }}
+                >
+                  Add Event
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+
         {/* My Profile & Listings */}
         {currentUser && (
           <Card className="mt-6 p-5">
             <SectionTitle title="My Profile" />
             <div className="grid grid-cols-1 gap-4 text-sm md:grid-cols-3">
-              <div><strong>Username:</strong> {currentUser.username}</div>
-              <div><strong>Email:</strong> {currentUser.wharton_email}</div>
+              <div><strong>Full Name:</strong> {currentUser.username}</div>
+              <div><strong>Email/Username:</strong> {currentUser.wharton_email}</div>
               <div><strong>WG Cohort:</strong> {currentUser.cohort}</div>
               <div><strong>Phone:</strong> {currentUser.phone_e164}</div>
               <div><strong>Venmo:</strong> @{currentUser.venmo_handle}</div>
@@ -935,10 +1431,14 @@ export default function WTPInteractiveDiagram() {
                 <ul className="divide-y divide-gray-200">
                   {myListings.map((l) => (
                     <li key={l.id} className="flex items-center justify-between py-2 text-sm">
-                      <span>{l.role} 1 ticket @ {l.percent}% — {EVENTS.find((ev) => ev.id === l.eventId)?.label}</span>
+                      {l.source === 'market' ? (
+                        <span>{l.role} 1 ticket @ ${l.price} — {l.label}</span>
+                      ) : (
+                        <span>{l.role} 1 ticket @ {l.percent}% — {l.label}</span>
+                      )}
                       <div className="flex items-center gap-2">
-                        <TradedButton onClick={() => markTraded(l.id)} />
-                        <DeleteButton onClick={() => deletePosting(l.id)} />
+                        <TradedButton onClick={() => markTraded(l.id, l.source)} />
+                        <DeleteButton onClick={() => deletePosting(l.id, l.source)} />
                       </div>
                     </li>
                   ))}
