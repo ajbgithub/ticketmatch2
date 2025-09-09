@@ -72,6 +72,7 @@ interface Profile {
 interface Posting {
   id: string;
   userId: string;      // device_id
+  userUid?: string;    // supabase auth user_id
   eventId: string;     // event_id
   role: Role;
   percent: number;     // 0..100
@@ -179,6 +180,7 @@ const parseE164 = (e164?: string): { code: string; digits: string } => {
 interface MarketPosting {
   id: string;
   userId: string;      // device_id
+  userUid?: string;    // supabase auth user_id
   eventId: string;     // event_id
   role: Role;          // buyer or seller
   price: number;       // explicit price
@@ -369,6 +371,7 @@ export default function TicketMarket() {
                 {
                   id: String(r.id),
                   userId: r.device_id,
+                  userUid: r.user_id ?? undefined,
                   eventId: r.event_id,
                   role: r.role,
                   percent: r.percent,
@@ -399,7 +402,7 @@ export default function TicketMarket() {
               return [
                 ...rest,
                 {
-                  id: String(r.id), userId: r.device_id, eventId: r.event_id, role: r.role,
+                  id: String(r.id), userId: r.device_id, userUid: r.user_id ?? undefined, eventId: r.event_id, role: r.role,
                   price: Number(r.price) || 0, tickets: r.tickets ?? 1, description: r.description ?? '',
                   name: r.username, phone: r.phone_e164, cohort: r.cohort ?? undefined,
                   venmo: r.venmo_handle ?? undefined, email: r.email ?? r.email_address ?? undefined,
@@ -515,6 +518,7 @@ export default function TicketMarket() {
         data.map((r: any) => ({
           id: String(r.id),
           userId: r.device_id,
+          userUid: r.user_id ?? undefined,
           eventId: r.event_id,
           role: r.role,
           percent: r.percent,
@@ -538,7 +542,7 @@ export default function TicketMarket() {
     if (data) {
       setMarketPostings(
         data.map((r: any) => ({
-          id: String(r.id), userId: r.device_id, eventId: r.event_id, role: r.role,
+          id: String(r.id), userId: r.device_id, userUid: r.user_id ?? undefined, eventId: r.event_id, role: r.role,
           price: Number(r.price) || 0, tickets: r.tickets ?? 1, description: r.description ?? '',
           name: r.username, phone: r.phone_e164, cohort: r.cohort ?? undefined,
           venmo: r.venmo_handle ?? undefined, email: r.email ?? r.email_address ?? undefined,
@@ -720,6 +724,7 @@ export default function TicketMarket() {
           {
             id: String(data.id),
             userId: data.device_id,
+            userUid: data.user_id ?? undefined,
             eventId: data.event_id,
             role: data.role,
             percent: data.percent,
@@ -819,8 +824,8 @@ export default function TicketMarket() {
   type Match = { me: Posting; other: Posting; agreedPct: number; tickets: number };
   const getMatches = (): Match[] => {
     if (!currentUser) return [];
-    const mine = postings.filter((p) => p.name === currentUser.full_name && p.eventId === eventId);
-    const others = postings.filter((p) => p.name !== currentUser.full_name && p.eventId === eventId);
+    const mine = postings.filter((p) => p.userUid === currentUser.id && p.eventId === eventId);
+    const others = postings.filter((p) => p.userUid !== currentUser.id && p.eventId === eventId);
     const out: Match[] = [];
     for (const me of mine) {
       const compatible = others.filter((o) =>
@@ -841,8 +846,8 @@ export default function TicketMarket() {
   type MarketMatch = { me: MarketPosting; other: MarketPosting; agreedPrice: number; tickets: number };
   const getMarketMatches = (): MarketMatch[] => {
     if (!currentUser) return [];
-    const mine = marketPostings.filter((p) => p.name === currentUser.full_name && p.eventId === eventId);
-    const others = marketPostings.filter((p) => p.name !== currentUser.full_name && p.eventId === eventId);
+    const mine = marketPostings.filter((p) => p.userUid === currentUser.id && p.eventId === eventId);
+    const others = marketPostings.filter((p) => p.userUid !== currentUser.id && p.eventId === eventId);
     const out: MarketMatch[] = [];
     for (const me of mine) {
       const compatible = others.filter((o) => (me.role === 'buyer' && o.role === 'seller') || (me.role === 'seller' && o.role === 'buyer'));
@@ -867,10 +872,10 @@ export default function TicketMarket() {
   const myListings: ListingItem[] = useMemo(() => {
     if (!currentUser) return [] as ListingItem[];
     const a: ListingItem[] = postings
-      .filter(p => p.name === currentUser.full_name)
+      .filter(p => p.userUid === currentUser.id)
       .map(p => ({ source: 'ceiling' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, percent: p.percent, tickets: p.tickets }));
     const b: ListingItem[] = marketPostings
-      .filter(p => p.name === currentUser.full_name)
+      .filter(p => p.userUid === currentUser.id)
       .map(p => ({ source: 'market' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, price: p.price, tickets: p.tickets }));
     return [...b, ...a];
   }, [currentUser, postings, marketPostings, allEvents]);
@@ -1061,7 +1066,7 @@ export default function TicketMarket() {
                           if (data) {
                             setMarketPostings((prev) => ([
                               {
-                                id: String(data.id), userId: data.device_id, eventId: data.event_id, role: data.role,
+                                id: String(data.id), userId: data.device_id, userUid: data.user_id ?? undefined, eventId: data.event_id, role: data.role,
                                 price: Number(data.price)||0, tickets: data.tickets ?? 1, description: data.description ?? '',
                                 name: data.username, phone: data.phone_e164, cohort: data.cohort ?? undefined,
                                 venmo: data.venmo_handle ?? undefined, email: data.email ?? undefined,
@@ -1351,7 +1356,7 @@ export default function TicketMarket() {
 
           {/* RIGHT: Chat (live) */}
           <Card className="p-5 lg:col-span-1">
-            <SectionTitle title="Community Chat" subtitle="Messages are public to signed-in users (max 250 chars)" />
+            <SectionTitle title="Community Chat" subtitle="Messages are public; be respectful." />
             <div className="space-y-4">
               <div className="max-h-64 space-y-3 overflow-y-auto rounded-lg bg-gray-50 p-3">
                 {chat.map((c) => (
