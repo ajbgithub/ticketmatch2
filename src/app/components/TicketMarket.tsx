@@ -769,23 +769,15 @@ export default function TicketMarket() {
   // Supply/demand removed
 
   /* -------- UI -------- */
-  const [showBannerModal, setShowBannerModal] = useState(false);
   return (
     <div className="min-h-screen w-full bg-gray-50 text-gray-900">
       <div className="mx-auto max-w-7xl p-6 md:p-8">
         {/* Header */}
         <div className="mb-4">
-          <div className="flex items-center">
-            <img
-              src="/ticketmatch-banner.png"
-              alt="Ticketmatch"
-              className="h-24 md:h-32 w-auto cursor-pointer"
-              onClick={() => setShowBannerModal(true)}
-            />
-          </div>
+          <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
           <div className="mt-2 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
             <p className="md:flex-1 text-gray-700">
-              Buy and resell tickets at face value or lower. Sign in with Google and complete your profile to participate.
+              Buy and resell campus tickets at face value or lower, with live data and automation.
             </p>
             <div className="flex items-center gap-4 text-base sm:text-lg">
               <span className="mx-2 h-5 w-px bg-gray-300" />
@@ -1393,38 +1385,6 @@ export default function TicketMarket() {
           </Card>
         )}
       </div>
-
-      {/* Banner modal */}
-      {showBannerModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowBannerModal(false)}>
-          <div className="relative w-full max-w-3xl rounded-2xl bg-white p-5 shadow" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="absolute right-3 top-3 text-gray-500 hover:text-gray-700"
-              aria-label="Close"
-              onClick={() => setShowBannerModal(false)}
-            >
-              <X size={18} />
-            </button>
-            <h3 className="mb-2 text-lg font-semibold">Ticketmatch</h3>
-            <p className="mb-4 text-sm text-gray-700">
-              “trade tickets with data and automation; born out of necessity at Wharton as an mvp for mbamove.com” - Andrew J. Bilden WG26
-            </p>
-            <div className="aspect-video w-full">
-              <iframe
-                className="h-full w-full rounded-lg"
-                width="560"
-                height="315"
-                src="https://www.youtube.com/embed/vN5r8brp1Bo?si=ZgKcDPTtLhTr6umL"
-                title="YouTube video player"
-                frameBorder="0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                referrerPolicy="strict-origin-when-cross-origin"
-                allowFullScreen
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Slider thumb styling */}
       <style jsx>{`
