@@ -5,7 +5,7 @@ import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { X, MessageCircle, Trophy, ChevronDown, ChevronUp, Users, Share2, Copy } from 'lucide-react';
+import { X, MessageCircle, Trophy, ChevronDown, ChevronUp, Users, Share2 } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 
 /* =========================
@@ -621,6 +621,33 @@ export default function TicketMarket() {
         school_email: schoolEmail,
         bio,
       });
+      // Sync contact details to user's postings so matches reflect immediately
+      const contactEmail = schoolEmail || currentUser.email;
+      try {
+        await Promise.allSettled([
+          supabase.from('postings_public').update({
+            username: normalizeUsername(nameRaw),
+            phone_e164: e164,
+            venmo_handle: ven,
+            email: contactEmail,
+          }).eq('user_id', uid),
+          supabase.from('market_postings').update({
+            username: normalizeUsername(nameRaw),
+            phone_e164: e164,
+            venmo_handle: ven,
+            email: contactEmail,
+          }).eq('user_id', uid),
+        ]);
+        await Promise.allSettled([refreshPostings(), refreshMarketPostings()]);
+      } catch {}
+
+      // Clear transient inputs so controlled fields show updated current values
+      setPfFullName('');
+      setPfPhoneDigits('');
+      setPfVenmo('');
+      setPfSchoolEmail('');
+      setPfBio('');
+
       setPfSuccess('Success, your profile is updated!');
       if (showProfileModal) setShowProfileModal(false);
     } catch (e: any) {
@@ -1074,12 +1101,12 @@ export default function TicketMarket() {
                 const mm = myMarketMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="text-sm md:grid md:grid-cols-2 md:gap-3 md:overflow-visible flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
+                  <div className="text-sm flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
                       return (
-                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-4 text-white snap-start min-w-[85%] md:min-w-0">
+                        <div key={i} className="rounded-lg border border-purple-700 bg-purple-700 p-4 text-white snap-start min-w-[85%]">
                           <div className="mb-3 flex items-center justify-between">
                             <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
                             <WeTradedButton onClick={async () => {
@@ -1094,16 +1121,16 @@ export default function TicketMarket() {
                             <div>
                               <div className="font-semibold">Seller</div>
                               <div>{seller.name}</div>
-                              <div className="flex items-center gap-2"><span className="truncate">{seller.email}</span><button onClick={()=>copy(seller.email)} aria-label="Copy email"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">{seller.phone}</span><button onClick={()=>copy(seller.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">@{seller.venmo}</span><button onClick={()=>copy(seller.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.email ? `mailto:${seller.email}` : undefined}>{seller.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.phone ? `sms:${seller.phone}` : undefined}>{seller.phone}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.venmo ? `https://venmo.com/${normalizeVenmo(seller.venmo)}` : undefined}>@{seller.venmo}</a></div>
                             </div>
                             <div>
                               <div className="font-semibold">Buyer</div>
                               <div>{buyer.name}</div>
-                              <div className="flex items-center gap-2"><span className="truncate">{buyer.email}</span><button onClick={()=>copy(buyer.email)} aria-label="Copy email"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">{buyer.phone}</span><button onClick={()=>copy(buyer.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">@{buyer.venmo}</span><button onClick={()=>copy(buyer.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.email ? `mailto:${buyer.email}` : undefined}>{buyer.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.phone ? `sms:${buyer.phone}` : undefined}>{buyer.phone}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.venmo ? `https://venmo.com/${normalizeVenmo(buyer.venmo)}` : undefined}>@{buyer.venmo}</a></div>
                             </div>
                           </div>
                           {/* price hidden inside ticket per requirements */}
@@ -1118,13 +1145,13 @@ export default function TicketMarket() {
                 const mm = myMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="text-sm md:grid md:grid-cols-2 md:gap-3 md:overflow-visible flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
+                  <div className="text-sm flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
                       const agreedPct = m.agreedPct;
                       return (
-                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-4 text-white snap-start min-w-[85%] md:min-w-0">
+                        <div key={i} className="rounded-lg border border-purple-700 bg-purple-700 p-4 text-white snap-start min-w-[85%]">
                           <div className="mb-3 flex items-center justify-between">
                             <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
                             <WeTradedButton onClick={async () => {
@@ -1139,16 +1166,16 @@ export default function TicketMarket() {
                             <div>
                               <div className="font-semibold">Seller</div>
                               <div>{seller.name}</div>
-                              <div className="flex items-center gap-2"><span className="truncate">{seller.email}</span><button onClick={()=>copy(seller.email)} aria-label="Copy email"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">{seller.phone}</span><button onClick={()=>copy(seller.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">@{seller.venmo}</span><button onClick={()=>copy(seller.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.email ? `mailto:${seller.email}` : undefined}>{seller.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.phone ? `sms:${seller.phone}` : undefined}>{seller.phone}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.venmo ? `https://venmo.com/${normalizeVenmo(seller.venmo)}` : undefined}>@{seller.venmo}</a></div>
                             </div>
                             <div>
                               <div className="font-semibold">Buyer</div>
                               <div>{buyer.name}</div>
-                              <div className="flex items-center gap-2"><span className="truncate">{buyer.email}</span><button onClick={()=>copy(buyer.email)} aria-label="Copy email"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">{buyer.phone}</span><button onClick={()=>copy(buyer.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
-                              <div className="flex items-center gap-2"><span className="truncate">@{buyer.venmo}</span><button onClick={()=>copy(buyer.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.email ? `mailto:${buyer.email}` : undefined}>{buyer.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.phone ? `sms:${buyer.phone}` : undefined}>{buyer.phone}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.venmo ? `https://venmo.com/${normalizeVenmo(buyer.venmo)}` : undefined}>@{buyer.venmo}</a></div>
                             </div>
                           </div>
                           {/* price hidden inside ticket per requirements */}
@@ -1198,6 +1225,38 @@ export default function TicketMarket() {
                     <div>
                       <Label>Face Value</Label>
                       <Input type="number" placeholder="Face Value $" value={newEventPrice} onChange={(e)=>setNewEventPrice(Number(e.target.value))} />
+                    </div>
+                    <div>
+                      <Label>&nbsp;</Label>
+                      <Button
+                        type="button"
+                        onClick={async () => {
+                          const name = (newEventName || '').trim();
+                          const price = Number(newEventPrice);
+                          if (!name) { alert('Enter an event name'); return; }
+                          if (!Number.isFinite(price) || price < 0) { alert('Enter a valid face value'); return; }
+                          const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `evt-${Date.now()}`;
+                          const label = `${name} - Face Value $${price}`;
+                          try {
+                            const { error } = await supabase.rpc('tm_create_event', {
+                              p_username: adminEnvUser,
+                              p_password: adminEnvPass,
+                              p_id: id,
+                              p_label: label,
+                              p_type: 'ceiling',
+                              p_price: price,
+                            });
+                            if (error) { alert(`Failed to create event: ${error.message}`); return; }
+                            await refreshEvents();
+                            setEventId(id);
+                            setNewEventName('');
+                          } catch (e: any) {
+                            alert(e?.message || 'Failed to create event');
+                          }
+                        }}
+                      >
+                        Create
+                      </Button>
                     </div>
                   </>
                 )}
@@ -1420,7 +1479,7 @@ export default function TicketMarket() {
               </div>
               {pfError && <div className="text-red-600 text-sm md:col-span-2">{pfError}</div>}
               <div className="md:col-span-2">
-                <Button type="button" onClick={saveProfile}>Save Profile</Button>
+                <Button type="button" onClick={saveProfile}>Update Profile</Button>
               </div>
             </div>
           </Card>
@@ -1513,7 +1572,7 @@ export default function TicketMarket() {
             {pfError && <div className="mt-2 text-sm text-red-600">{pfError}</div>}
             <div className="mt-4 flex justify-end gap-2">
               <GhostButton onClick={() => setShowProfileModal(false)}>Close</GhostButton>
-              <Button onClick={saveProfile}>Save</Button>
+              <Button onClick={saveProfile}>Update Profile</Button>
             </div>
           </div>
         </div>
