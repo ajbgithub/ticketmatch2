@@ -497,10 +497,10 @@ export default function TicketMarket() {
   /* -------- Google Sign-In -------- */
   const signInWithGoogle = async () => {
     try {
-      const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}` : undefined;
-      await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
+      await supabase.auth.signInWithOAuth({ provider: 'google' });
     } catch (e) {
-      alert('Unable to start Google sign-in. Check OAuth redirect settings.');
+      console.error('Google sign-in failed', e);
+      alert('Unable to start Google sign-in. Please try again.');
     }
   };
 
@@ -1375,7 +1375,7 @@ export default function TicketMarket() {
                 {' '}<a href="https://mbamove.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">mbamove.com</a>.
               </p>
               <p className="mt-2">
-                <a href="https://linkedin.com/andrewjbilden" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Andrew J. Bilden, WG26</a>
+                <a href="http://linkedin.com/in/andrewjbilden" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Andrew J. Bilden, WG26</a>
               </p>
             </div>
             <div className="aspect-video w-full">
