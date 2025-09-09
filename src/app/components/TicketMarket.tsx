@@ -129,7 +129,32 @@ const isValidE164 = (e164: string): boolean => /^\+\d{6,16}$/.test((e164 || '').
 const normalizeVenmo = (h: string): string => (h || '').trim().replace(/^@/, '');
 // Allow letters, numbers, and common symbols (2..64 chars)
 const isValidVenmo = (h: string): boolean => /^[A-Za-z0-9!@#$%^&*()_+\-=.:@]{2,64}$/.test(normalizeVenmo(h));
-const copy = (text?: string) => text && navigator.clipboard?.writeText(text);
+const copy = (text?: string) => {
+  if (!text) return;
+  const fallbackCopy = () => {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    } catch {}
+  };
+  try {
+    // Use Clipboard API when available and in a secure context; fallback otherwise
+    if (navigator.clipboard && (window as any).isSecureContext) {
+      navigator.clipboard.writeText(text).catch(fallbackCopy);
+    } else {
+      fallbackCopy();
+    }
+  } catch {
+    fallbackCopy();
+  }
+};
 
 // Market posting (price-based) for market-type events (e.g., US Open)
 interface MarketPosting {
@@ -274,7 +299,19 @@ export default function TicketMarket() {
             school_email: prof.wharton_email ?? '',
             bio: prof.bio ?? '',
           });
-          const needs = !prof.username || !prof.phone_e164 || !prof.venmo_handle || !(prof.wharton_email || '').endsWith('.edu') || !(prof.bio ?? '').trim();
+          // Ensure we persist the auth email to profiles.recovery_email for notifications/support
+          try {
+            if (!prof.recovery_email || prof.recovery_email !== authEmail) {
+              await supabase.from('profiles').update({ recovery_email: authEmail }).eq('id', userId);
+            }
+          } catch {}
+          // Require: name, phone, Venmo, school .edu email, and bio
+          const needs =
+            !isValidUsername((prof.username || '').trim()) ||
+            !isValidE164(prof.phone_e164 || '') ||
+            !isValidVenmo(prof.venmo_handle || '') ||
+            !(prof.wharton_email || '').endsWith('.edu') ||
+            !(prof.bio ?? '').trim();
           if (needs) {
             setPfFullName(prof.username ?? '');
             setPfEmail(authEmail);
@@ -284,6 +321,11 @@ export default function TicketMarket() {
             setPfBio(prof.bio ?? '');
             setShowProfileModal(true);
           }
+        } else {
+          // No profile row yet: create one with recovery_email captured from auth
+          try {
+            await supabase.from('profiles').upsert({ id: userId, recovery_email: authEmail }, { onConflict: 'id' });
+          } catch {}
         }
       }
 
@@ -385,7 +427,19 @@ export default function TicketMarket() {
             school_email: prof.wharton_email ?? '',
             bio: prof.bio ?? '',
           });
-          const needs = !prof.username || !prof.phone_e164 || !prof.venmo_handle || !(prof.wharton_email || '').endsWith('.edu') || !(prof.bio ?? '').trim();
+          // Persist auth email to profiles.recovery_email if missing or outdated
+          try {
+            if (!prof.recovery_email || prof.recovery_email !== authEmail2) {
+              await supabase.from('profiles').update({ recovery_email: authEmail2 }).eq('id', sess.user.id);
+            }
+          } catch {}
+          // Require: name, phone, Venmo, school .edu email, and bio
+          const needs =
+            !isValidUsername((prof.username || '').trim()) ||
+            !isValidE164(prof.phone_e164 || '') ||
+            !isValidVenmo(prof.venmo_handle || '') ||
+            !(prof.wharton_email || '').endsWith('.edu') ||
+            !(prof.bio ?? '').trim();
           if (needs) {
             setPfFullName(prof.username ?? '');
             setPfEmail(authEmail2);
@@ -395,6 +449,11 @@ export default function TicketMarket() {
             setPfBio(prof.bio ?? '');
             setShowProfileModal(true);
           }
+        } else {
+          // Seed profile with recovery_email on first sign-in
+          try {
+            await supabase.from('profiles').upsert({ id: sess.user.id, recovery_email: authEmail2 }, { onConflict: 'id' });
+          } catch {}
         }
       }
       if (evt === 'SIGNED_OUT') {
@@ -524,18 +583,19 @@ export default function TicketMarket() {
     }
     const bio = pfBio !== '' ? pfBio : currentUser.bio;
 
-    // Validate only changed fields
-    if (pfFullName.trim() && !isValidUsername(normalizeUsername(nameRaw))) {
-      setPfError('Please enter First Last'); return;
-    }
-    if (pfSchoolEmail.trim() && !schoolEmail.toLowerCase().endsWith('.edu')) {
-      setPfError('School email must end in .edu'); return;
-    }
-    if (pfVenmo.trim() && !isValidVenmo(ven)) {
-      setPfError('Enter a valid Venmo'); return;
-    }
-    if (pfPhoneDigits.trim() && !isValidE164(e164)) {
-      setPfError('Enter a valid phone number'); return;
+    // Validate only changed fields (general case)
+    if (pfFullName.trim() && !isValidUsername(normalizeUsername(nameRaw))) { setPfError('Please enter First Last'); return; }
+    if (pfSchoolEmail.trim() && !schoolEmail.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
+    if (pfVenmo.trim() && !isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
+    if (pfPhoneDigits.trim() && !isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
+
+    // When completing initial profile, require all fields
+    if (showProfileModal) {
+      if (!isValidUsername(normalizeUsername(nameRaw))) { setPfError('Please enter First Last'); return; }
+      if (!isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
+      if (!schoolEmail.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
+      if (!(bio || '').trim()) { setPfError('Bio is required'); return; }
+      if (!ven || !isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
     }
 
     try {
@@ -546,6 +606,7 @@ export default function TicketMarket() {
         phone_e164: e164,
         venmo_handle: ven,
         wharton_email: schoolEmail,
+        recovery_email: currentUser.email,
         bio,
       }, { onConflict: 'id' });
       if (error) { setPfError(error.message); return; }
@@ -561,6 +622,7 @@ export default function TicketMarket() {
         bio,
       });
       setPfSuccess('Success, your profile is updated!');
+      if (showProfileModal) setShowProfileModal(false);
     } catch (e: any) {
       setPfError(e.message || 'Failed to save profile');
     }
@@ -580,7 +642,7 @@ export default function TicketMarket() {
       phone_e164: currentUser.phone_e164,
       cohort: currentUser.school,
       venmo_handle: currentUser.venmo_handle,
-      email: currentUser.school_email,
+      email: currentUser.school_email || currentUser.email,
     };
 
     try {
@@ -933,7 +995,7 @@ export default function TicketMarket() {
                             phone_e164: currentUser.phone_e164,
                             cohort: currentUser.school,
                             venmo_handle: currentUser.venmo_handle,
-                            email: currentUser.school_email,
+                            email: currentUser.school_email || currentUser.email,
                           };
                           const { data, error } = await supabase.from('market_postings').insert(row).select().single();
                           if (error) { alert(`Post failed: ${error.message}`); return; }
@@ -1316,7 +1378,7 @@ export default function TicketMarket() {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
                 <Label>Full Name</Label>
-                <Input value={pfFullName || currentUser.full_name} onChange={(e)=>setPfFullName(e.target.value)} />
+                <Input value={pfFullName || currentUser.full_name || ''} onChange={(e)=>setPfFullName(e.target.value)} />
               </div>
               <div>
                 <Label>Auth Email</Label>
@@ -1333,7 +1395,7 @@ export default function TicketMarket() {
               </div>
               <div>
                 <Label>School Email (.edu)</Label>
-                <Input value={pfSchoolEmail || currentUser.school_email} onChange={(e)=>setPfSchoolEmail(e.target.value)} />
+                <Input value={pfSchoolEmail || currentUser.school_email || ''} onChange={(e)=>setPfSchoolEmail(e.target.value)} />
               </div>
               <div>
                 <Label>Phone (WhatsApp)</Label>
@@ -1341,16 +1403,20 @@ export default function TicketMarket() {
                   <Select className="w-28" value={pfAreaCode} onChange={(e)=>setPfAreaCode(e.target.value)}>
                     {AREA_CODES.map((c)=> <option key={c} value={c}>{c}</option>)}
                   </Select>
-                  <Input value={pfPhoneDigits} onChange={(e)=>setPfPhoneDigits(e.target.value)} placeholder={currentUser.phone_e164.replace(/^\+\d+/, '')} />
+                  <Input
+                    value={pfPhoneDigits}
+                    onChange={(e)=>setPfPhoneDigits(e.target.value)}
+                    placeholder={(currentUser.phone_e164 ?? '').replace(/^\+\d+/, '')}
+                  />
                 </div>
               </div>
               <div>
                 <Label>Venmo</Label>
-                <Input value={pfVenmo || currentUser.venmo_handle} onChange={(e)=>setPfVenmo(e.target.value)} />
+                <Input value={pfVenmo || currentUser.venmo_handle || ''} onChange={(e)=>setPfVenmo(e.target.value)} />
               </div>
               <div className="md:col-span-2">
                 <Label>Bio</Label>
-                <input className="w-full rounded-xl border border-gray-300 px-3 py-2" value={pfBio || currentUser.bio} onChange={(e)=>setPfBio(e.target.value)} />
+                <input className="w-full rounded-xl border border-gray-300 px-3 py-2" value={pfBio || currentUser.bio || ''} onChange={(e)=>setPfBio(e.target.value)} />
               </div>
               {pfError && <div className="text-red-600 text-sm md:col-span-2">{pfError}</div>}
               <div className="md:col-span-2">
@@ -1405,26 +1471,13 @@ export default function TicketMarket() {
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-2 text-lg font-semibold">Complete Your Profile</h3>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              <div className="md:col-span-2">
-                <Label>Auth Email</Label>
-                <Input value={pfEmail} readOnly />
-              </div>
               <div>
                 <Label>Full Name</Label>
                 <Input value={pfFullName} onChange={(e)=>setPfFullName(e.target.value)} placeholder="First Last" />
               </div>
               <div>
-                <Label>School</Label>
-                <Select value={pfSchool} onChange={(e)=>setPfSchool(e.target.value as any)}>
-                  <option value="Wharton">Wharton</option>
-                  <option value="Penn">Penn</option>
-                  <option value="HBS">HBS</option>
-                  <option value="GSB">GSB</option>
-                </Select>
-              </div>
-              <div className="md:col-span-2">
-                <Label>School Email (.edu)</Label>
-                <Input value={pfSchoolEmail} onChange={(e)=>setPfSchoolEmail(e.target.value)} placeholder="you@school.edu" />
+                <Label>Auth Email</Label>
+                <Input value={pfEmail} readOnly />
               </div>
               <div className="md:col-span-2">
                 <Label>Phone (WhatsApp)</Label>
@@ -1436,6 +1489,19 @@ export default function TicketMarket() {
                 </div>
               </div>
               <div className="md:col-span-2">
+                <Label>School Email (.edu)</Label>
+                <Input value={pfSchoolEmail} onChange={(e)=>setPfSchoolEmail(e.target.value)} placeholder="you@school.edu" />
+              </div>
+              <div>
+                <Label>School</Label>
+                <Select value={pfSchool} onChange={(e)=>setPfSchool(e.target.value as any)}>
+                  <option value="Wharton">Wharton</option>
+                  <option value="Penn">Penn</option>
+                  <option value="HBS">HBS</option>
+                  <option value="GSB">GSB</option>
+                </Select>
+              </div>
+              <div>
                 <Label>Venmo</Label>
                 <Input value={pfVenmo} onChange={(e)=>setPfVenmo(e.target.value)} placeholder="@yourhandle" />
               </div>
