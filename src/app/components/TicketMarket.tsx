@@ -44,8 +44,14 @@ const DeleteButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
     <X size={16} />
   </button>
 );
-const WeTradedButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
-  <button onClick={onClick} className="rounded-lg px-3 py-2 text-sm font-semibold bg-green-600 text-white hover:bg-green-500 transition">We Traded!</button>
+const WeTradedButton: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ onClick, disabled }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    className={`rounded-lg px-3 py-2 text-sm font-semibold text-white transition ${disabled ? 'bg-green-400 opacity-60 cursor-not-allowed' : 'bg-green-600 hover:bg-green-500'}`}
+  >
+    We Traded!
+  </button>
 );
 
 /* =========================
@@ -156,6 +162,19 @@ const copy = (text?: string) => {
   }
 };
 
+// Parse an E.164 phone into country code + local digits (best-effort)
+const parseE164 = (e164?: string): { code: string; digits: string } => {
+  const v = (e164 || '').trim();
+  if (!v.startsWith('+')) return { code: AREA_CODES[0], digits: onlyDigits(v) };
+  // Choose the longest matching known code
+  let best = AREA_CODES[0];
+  for (const c of AREA_CODES) {
+    if (v.startsWith(c) && c.length > best.length) best = c;
+  }
+  const digits = onlyDigits(v.slice(best.length));
+  return { code: best, digits };
+};
+
 // Market posting (price-based) for market-type events (e.g., US Open)
 interface MarketPosting {
   id: string;
@@ -229,6 +248,7 @@ export default function TicketMarket() {
   const [newEventName, setNewEventName] = useState<string>('');
   const [newEventType, setNewEventType] = useState<EventType>('market');
   const [newEventPrice, setNewEventPrice] = useState<number>(50);
+  const [weTradedSet, setWeTradedSet] = useState<Set<string>>(new Set());
 
   const currentEvent = useMemo(() => allEvents.find((e) => e.id === eventId), [allEvents, eventId]);
   const eventPrice = currentEvent?.price ?? 0;
@@ -319,6 +339,11 @@ export default function TicketMarket() {
             setPfVenmo(prof.venmo_handle ?? '');
             setPfSchoolEmail(prof.wharton_email ?? '');
             setPfBio(prof.bio ?? '');
+            try {
+              const ph = parseE164(prof.phone_e164);
+              setPfAreaCode(ph.code);
+              setPfPhoneDigits(ph.digits);
+            } catch {}
             setShowProfileModal(true);
           }
         } else {
@@ -447,6 +472,11 @@ export default function TicketMarket() {
             setPfVenmo(prof.venmo_handle ?? '');
             setPfSchoolEmail(prof.wharton_email ?? '');
             setPfBio(prof.bio ?? '');
+            try {
+              const ph = parseE164(prof.phone_e164);
+              setPfAreaCode(ph.code);
+              setPfPhoneDigits(ph.digits);
+            } catch {}
             setShowProfileModal(true);
           }
         } else {
@@ -641,12 +671,14 @@ export default function TicketMarket() {
         await Promise.allSettled([refreshPostings(), refreshMarketPostings()]);
       } catch {}
 
-      // Clear transient inputs so controlled fields show updated current values
-      setPfFullName('');
-      setPfPhoneDigits('');
-      setPfVenmo('');
-      setPfSchoolEmail('');
-      setPfBio('');
+      // Update transient inputs to reflect saved values (so they show on screen)
+      const parsed = parseE164(e164);
+      setPfAreaCode(parsed.code);
+      setPfPhoneDigits(parsed.digits);
+      setPfFullName(normalizeUsername(nameRaw));
+      setPfVenmo(ven);
+      setPfSchoolEmail(schoolEmail);
+      setPfBio(bio);
 
       setPfSuccess('Success, your profile is updated!');
       if (showProfileModal) setShowProfileModal(false);
@@ -1109,26 +1141,39 @@ export default function TicketMarket() {
                         <div key={i} className="rounded-lg border border-purple-700 bg-purple-700 p-4 text-white snap-start min-w-[85%]">
                           <div className="mb-3 flex items-center justify-between">
                             <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
-                            <WeTradedButton onClick={async () => {
+                      {(() => {
+                        const mk = `market:${eventId}:${buyer.userId}:${seller.userId}`;
+                        const disabled = weTradedSet.has(mk);
+                        return (
+                          <WeTradedButton
+                            disabled={disabled}
+                            onClick={async () => {
+                              if (weTradedSet.has(mk)) return;
                               try {
                                 await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: m.tickets, p_source: 'market' });
                               } catch {}
+                              setWeTradedSet(prev => new Set(prev).add(mk));
                               setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: m.tickets, timestamp: new Date() }]);
                               setTotalTradedTickets((prev) => prev + m.tickets);
-                            }} />
+                              setPostNotice('Thanks for telling us!');
+                              setTimeout(() => setPostNotice(''), 3000);
+                            }}
+                          />
+                        );
+                      })()}
                           </div>
                           <div className="space-y-2 text-sm md:text-base">
                             <div>
                               <div className="font-semibold">Seller</div>
                               <div>{seller.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.email ? `mailto:${seller.email}` : undefined}>{seller.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(seller.email)}` : undefined}>{seller.email}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" href={seller.phone ? `sms:${seller.phone}` : undefined}>{seller.phone}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.venmo ? `https://venmo.com/${normalizeVenmo(seller.venmo)}` : undefined}>@{seller.venmo}</a></div>
                             </div>
                             <div>
                               <div className="font-semibold">Buyer</div>
                               <div>{buyer.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.email ? `mailto:${buyer.email}` : undefined}>{buyer.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(buyer.email)}` : undefined}>{buyer.email}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.phone ? `sms:${buyer.phone}` : undefined}>{buyer.phone}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.venmo ? `https://venmo.com/${normalizeVenmo(buyer.venmo)}` : undefined}>@{buyer.venmo}</a></div>
                             </div>
@@ -1154,26 +1199,39 @@ export default function TicketMarket() {
                         <div key={i} className="rounded-lg border border-purple-700 bg-purple-700 p-4 text-white snap-start min-w-[85%]">
                           <div className="mb-3 flex items-center justify-between">
                             <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
-                            <WeTradedButton onClick={async () => {
-                              try {
-                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: m.tickets, p_source: 'ceiling' });
-                              } catch {}
-                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: m.tickets, timestamp: new Date() }]);
-                              setTotalTradedTickets((prev) => prev + m.tickets);
-                            }} />
+                            {(() => {
+                              const mk = `ceiling:${eventId}:${buyer.userId}:${seller.userId}`;
+                              const disabled = weTradedSet.has(mk);
+                              return (
+                                <WeTradedButton
+                                  disabled={disabled}
+                                  onClick={async () => {
+                                    if (weTradedSet.has(mk)) return;
+                                    try {
+                                      await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: m.tickets, p_source: 'ceiling' });
+                                    } catch {}
+                                    setWeTradedSet(prev => new Set(prev).add(mk));
+                                    setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: m.tickets, timestamp: new Date() }]);
+                                    setTotalTradedTickets((prev) => prev + m.tickets);
+                                    setPostNotice('Thanks for telling us!');
+                                    setTimeout(() => setPostNotice(''), 3000);
+                                  }}
+                                />
+                              );
+                            })()}
                           </div>
                           <div className="space-y-2 text-sm md:text-base">
                             <div>
                               <div className="font-semibold">Seller</div>
                               <div>{seller.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.email ? `mailto:${seller.email}` : undefined}>{seller.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(seller.email)}` : undefined}>{seller.email}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" href={seller.phone ? `sms:${seller.phone}` : undefined}>{seller.phone}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.venmo ? `https://venmo.com/${normalizeVenmo(seller.venmo)}` : undefined}>@{seller.venmo}</a></div>
                             </div>
                             <div>
                               <div className="font-semibold">Buyer</div>
                               <div>{buyer.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.email ? `mailto:${buyer.email}` : undefined}>{buyer.email}</a></div>
+                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(buyer.email)}` : undefined}>{buyer.email}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.phone ? `sms:${buyer.phone}` : undefined}>{buyer.phone}</a></div>
                               <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.venmo ? `https://venmo.com/${normalizeVenmo(buyer.venmo)}` : undefined}>@{buyer.venmo}</a></div>
                             </div>
@@ -1465,7 +1523,7 @@ export default function TicketMarket() {
                   <Input
                     value={pfPhoneDigits}
                     onChange={(e)=>setPfPhoneDigits(e.target.value)}
-                    placeholder={(currentUser.phone_e164 ?? '').replace(/^\+\d+/, '')}
+                    placeholder={parseE164(currentUser.phone_e164 || '').digits}
                   />
                 </div>
               </div>
@@ -1478,6 +1536,11 @@ export default function TicketMarket() {
                 <input className="w-full rounded-xl border border-gray-300 px-3 py-2" value={pfBio || currentUser.bio || ''} onChange={(e)=>setPfBio(e.target.value)} />
               </div>
               {pfError && <div className="text-red-600 text-sm md:col-span-2">{pfError}</div>}
+              {pfSuccess && (
+                <div className="md:col-span-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
+                  Success: your profile is updated
+                </div>
+              )}
               <div className="md:col-span-2">
                 <Button type="button" onClick={saveProfile}>Update Profile</Button>
               </div>
@@ -1570,6 +1633,7 @@ export default function TicketMarket() {
               </div>
             </div>
             {pfError && <div className="mt-2 text-sm text-red-600">{pfError}</div>}
+            {pfSuccess && <div className="mt-2 text-sm text-green-700 bg-green-50 rounded px-3 py-2">Success: your profile is updated</div>}
             <div className="mt-4 flex justify-end gap-2">
               <GhostButton onClick={() => setShowProfileModal(false)}>Close</GhostButton>
               <Button onClick={saveProfile}>Update Profile</Button>
