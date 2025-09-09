@@ -5,7 +5,7 @@ import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { X, MessageCircle, Trophy, ChevronDown, ChevronUp, Users } from 'lucide-react';
+import { X, MessageCircle, Trophy, ChevronDown, ChevronUp, Users, Share2, Copy } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 
 /* =========================
@@ -13,7 +13,7 @@ import { supabase } from '@/lib/supabaseClient';
    ========================= */
 type DivProps = React.HTMLAttributes<HTMLDivElement>;
 const Card: React.FC<DivProps & { className?: string }> = ({ className = '', children, ...rest }) => (
-  <div className={`rounded-2xl shadow-sm border border-gray-200 bg-white ${className}`} {...rest}>{children}</div>
+  <div className={`rounded-none shadow-none border-0 bg-transparent ${className}`} {...rest}>{children}</div>
 );
 const SectionTitle: React.FC<{ title: string; subtitle?: string }> = ({ title, subtitle }) => (
   <div className="mb-4">
@@ -25,13 +25,13 @@ const Label: React.FC<React.LabelHTMLAttributes<HTMLLabelElement>> = ({ classNam
   <label className={`block text-sm font-medium text-gray-700 ${className}`} {...rest}>{children}</label>
 );
 const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = '', ...rest }) => (
-  <input className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${className}`} {...rest} />
+  <input className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${className}`} {...rest} />
 );
 const Select: React.FC<React.SelectHTMLAttributes<HTMLSelectElement>> = ({ className = '', children, ...rest }) => (
-  <select className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${className}`} {...rest}>{children}</select>
+  <select className={`w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 ${className}`} {...rest}>{children}</select>
 );
 const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { className?: string }> = ({ className = '', children, ...rest }) => (
-  <button className={`rounded-xl px-3 py-2 text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-500 active:bg-indigo-700 transition ${className}`} {...rest}>{children}</button>
+  <button className={`rounded-xl px-3 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-500 active:bg-blue-700 transition ${className}`} {...rest}>{children}</button>
 );
 const GhostButton: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { className?: string }> = ({ className = '', children, ...rest }) => (
   <button className={`rounded-xl px-3 py-2 text-sm font-semibold border border-gray-300 text-gray-700 hover:bg-gray-50 transition ${className}`} {...rest}>{children}</button>
@@ -45,7 +45,7 @@ const DeleteButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
   </button>
 );
 const WeTradedButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
-  <button onClick={onClick} className="rounded-lg px-3 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-500 transition">We Traded!</button>
+  <button onClick={onClick} className="rounded-lg px-3 py-2 text-sm font-semibold bg-green-600 text-white hover:bg-green-500 transition">We Traded!</button>
 );
 
 /* =========================
@@ -97,8 +97,7 @@ interface Trade {
 type EventType = 'market' | 'ceiling';
 type EventItem = { id: string; label: string; type: EventType; price?: number };
 const BASE_EVENTS: EventItem[] = [
-  { id: 'usopen', label: 'US Open (Market Pricing)', type: 'market' },
-  { id: 'wp', label: 'White Party - Member Price $50', type: 'ceiling', price: 50 },
+  { id: 'colombia-trek', label: 'Colombia Trek - Face Value $0', type: 'ceiling', price: 0 },
 ];
 
 // Membership removed
@@ -166,6 +165,7 @@ export default function TicketMarket() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [postNotice, setPostNotice] = useState<string>(''); // success banner
   const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
+  const [showBanner, setShowBanner] = useState<boolean>(false);
   // Profile completion state
   const [pfFullName, setPfFullName] = useState<string>('');
   const [pfEmail, setPfEmail] = useState<string>('');
@@ -182,13 +182,18 @@ export default function TicketMarket() {
   // Events and posting fields
   const [extraEvents, setExtraEvents] = useState<EventItem[]>([]);
   const allEvents = useMemo(() => {
-    // Merge server events first, then base, then any extra (legacy fallback)
+    // Prefer server events; fallback to base. Hide legacy US Open / White Party.
+    const merged = [...serverEvents, ...BASE_EVENTS, ...extraEvents];
     const byId = new Map<string, EventItem>();
-    [...serverEvents, ...BASE_EVENTS, ...extraEvents].forEach(e => byId.set(e.id, e));
+    merged.forEach(e => {
+      const label = (e.label || '').toLowerCase();
+      if (e.id === 'usopen' || e.id === 'wp' || label.includes('us open') || label.includes('white party')) return;
+      byId.set(e.id, e);
+    });
     return Array.from(byId.values());
   }, [serverEvents, extraEvents]);
-  // Default to WP for FOMO when logged out, else remember last
-  const [eventId, setEventId] = useState<string>('wp');
+  // Blank default so user actively selects an event
+  const [eventId, setEventId] = useState<string>('');
   const [role, setRole] = useState<Role>('buyer');
   const [percent, setPercent] = useState<number>(100);
   const [marketDescription, setMarketDescription] = useState<string>('');
@@ -212,8 +217,9 @@ export default function TicketMarket() {
     return BASE_EVENTS[BASE_EVENTS.length - 1].id; // fallback
   }, [serverEvents]);
 
+  // Do not auto-select for signed-out; allow signed-in to auto-select if none chosen
   useEffect(() => {
-    if (!currentUser && latestEventId && eventId !== latestEventId) setEventId(latestEventId);
+    if (currentUser && !eventId && latestEventId) setEventId(latestEventId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestEventId, currentUser]);
 
@@ -223,9 +229,9 @@ export default function TicketMarket() {
       if (!evErr && ev) return true;
     } catch {}
     try {
-      const label = currentEvent?.label || (eventId === 'usopen' ? 'US Open (Market Pricing)' : eventId);
-      const type: any = currentEvent?.type || 'market';
-      const priceVal: any = currentEvent?.price ?? null;
+      const label = currentEvent?.label || eventId;
+      const type: any = 'ceiling';
+      const priceVal: any = currentEvent?.price ?? 0;
       const { error } = await supabase.rpc('tm_create_event', {
         p_username: adminEnvUser,
         p_password: adminEnvPass,
@@ -278,9 +284,6 @@ export default function TicketMarket() {
             setPfBio(prof.bio ?? '');
             setShowProfileModal(true);
           }
-        } else {
-          setPfEmail(authEmail);
-          setShowProfileModal(true);
         }
       }
 
@@ -392,9 +395,6 @@ export default function TicketMarket() {
             setPfBio(prof.bio ?? '');
             setShowProfileModal(true);
           }
-        } else {
-          setPfEmail(authEmail2);
-          setShowProfileModal(true);
         }
       }
       if (evt === 'SIGNED_OUT') {
@@ -496,47 +496,71 @@ export default function TicketMarket() {
 
   /* -------- Google Sign-In -------- */
   const signInWithGoogle = async () => {
-    await supabase.auth.signInWithOAuth({ provider: 'google' });
+    try {
+      const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}` : undefined;
+      await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
+    } catch (e) {
+      alert('Unable to start Google sign-in. Check OAuth redirect settings.');
+    }
   };
 
-  /* -------- Save Profile -------- */
+  /* -------- Save Profile (validate only changed fields) -------- */
+  const [pfSuccess, setPfSuccess] = useState<string>('');
   const saveProfile = async () => {
     setPfError('');
-    const name = normalizeUsername(pfFullName);
-    if (!isValidUsername(name)) { setPfError('Please enter First Last'); return; }
-    if (!pfSchoolEmail.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
-    const ven = normalizeVenmo(pfVenmo);
-    if (!isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
-    const e164 = buildE164(pfAreaCode, pfPhoneDigits);
-    if (!isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
-    if (!pfBio.trim()) { setPfError('Bio is required'); return; }
+    setPfSuccess('');
 
-    const { data: s } = await supabase.auth.getSession();
-    const uid = s?.session?.user?.id;
-    if (!uid) { setPfError('Not signed in'); return; }
+    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+    if (!uid || !currentUser) { setPfError('Not signed in'); return; }
+
+    // Effective values (fallback to existing profile if input left blank)
+    const nameRaw = pfFullName.trim() || currentUser.full_name;
+    const school = (pfSchool || currentUser.school) as any;
+    const schoolEmail = (pfSchoolEmail.trim() || currentUser.school_email).trim();
+    const ven = normalizeVenmo(pfVenmo.trim() || currentUser.venmo_handle);
+    let e164 = currentUser.phone_e164;
+    if (pfPhoneDigits.trim()) {
+      e164 = buildE164(pfAreaCode, pfPhoneDigits);
+    }
+    const bio = pfBio !== '' ? pfBio : currentUser.bio;
+
+    // Validate only changed fields
+    if (pfFullName.trim() && !isValidUsername(normalizeUsername(nameRaw))) {
+      setPfError('Please enter First Last'); return;
+    }
+    if (pfSchoolEmail.trim() && !schoolEmail.toLowerCase().endsWith('.edu')) {
+      setPfError('School email must end in .edu'); return;
+    }
+    if (pfVenmo.trim() && !isValidVenmo(ven)) {
+      setPfError('Enter a valid Venmo'); return;
+    }
+    if (pfPhoneDigits.trim() && !isValidE164(e164)) {
+      setPfError('Enter a valid phone number'); return;
+    }
 
     try {
       const { error } = await supabase.from('profiles').upsert({
         id: uid,
-        username: name,
-        cohort: pfSchool, // reuse as school
+        username: normalizeUsername(nameRaw),
+        cohort: school,
         phone_e164: e164,
         venmo_handle: ven,
-        wharton_email: pfSchoolEmail,
-        bio: pfBio,
+        wharton_email: schoolEmail,
+        bio,
       }, { onConflict: 'id' });
       if (error) { setPfError(error.message); return; }
+
       setCurrentUser({
         id: uid,
-        full_name: name,
-        email: pfEmail,
-        school: pfSchool,
+        full_name: normalizeUsername(nameRaw),
+        email: currentUser.email,
+        school,
         phone_e164: e164,
         venmo_handle: ven,
-        school_email: pfSchoolEmail,
-        bio: pfBio,
+        school_email: schoolEmail,
+        bio,
       });
-      setShowProfileModal(false);
+      setPfSuccess('Success, your profile is updated!');
     } catch (e: any) {
       setPfError(e.message || 'Failed to save profile');
     }
@@ -590,7 +614,7 @@ export default function TicketMarket() {
       });
 
       // success banner
-      setPostNotice('Success! Your post is on the market. Scroll to bottom to delete old posts');
+      setPostNotice("Success! Your post is live. Ensure to review My Listings if you've traded a ticket already.");
       setTimeout(() => setPostNotice(''), 5000);
     } catch (err: any) {
       console.error('Post creation error:', err);
@@ -770,32 +794,59 @@ export default function TicketMarket() {
 
   /* -------- UI -------- */
   return (
-    <div className="min-h-screen w-full bg-gray-50 text-gray-900">
+    <div className="min-h-screen w-full bg-white text-gray-900">
       <div className="mx-auto max-w-7xl p-6 md:p-8">
         {/* Header */}
         <div className="mb-4">
-          <h1 className="text-3xl font-extrabold tracking-tight">Ticketmatch</h1>
+          <div className="flex items-center">
+            <img
+              src="/ticketmatch-banner.png"
+              alt="Ticketmatch"
+              className="h-24 md:h-32 w-auto cursor-pointer"
+              onClick={() => setShowBanner(true)}
+            />
+          </div>
           <div className="mt-2 flex flex-col md:flex-row md:items-center gap-3 md:gap-4">
             <p className="md:flex-1 text-gray-700">
               Buy and resell campus tickets at face value or lower, with live data and automation.
             </p>
             <div className="flex items-center gap-4 text-base sm:text-lg">
               <span className="mx-2 h-5 w-px bg-gray-300" />
-              <Users className="text-indigo-600" size={22} />
+              <Users className="text-blue-600" size={22} />
               <span className="font-extrabold text-2xl">100+</span>
               <span className="text-gray-700">traders</span>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    if (navigator.share) {
+                      await navigator.share({ url: 'https://ticketmatch.vercel.app', title: 'Ticketmatch' });
+                    } else {
+                      await navigator.clipboard.writeText('https://ticketmatch.vercel.app');
+                      alert('Link copied to clipboard');
+                    }
+                  } catch {}
+                }}
+                className="inline-flex items-center"
+                aria-label="Share Ticketmatch"
+                title="Share"
+              >
+                <Share2 className="text-green-600" size={18} />
+              </button>
             </div>
           </div>
         </div>
 
         {/* Membership removed */}
 
+        {/* Event selection moved below Matches for signed-out users */}
+
         {/* Auth */}
         {!currentUser ? (
           <Card className="mb-6 p-5">
             <SectionTitle title="Sign in" subtitle="Use Google, then complete your profile" />
             <div className="flex items-center gap-2">
-              <Button type="button" className="bg-red-600 hover:bg-red-500" onClick={signInWithGoogle}>Continue with Google</Button>
+              <Button type="button" onClick={signInWithGoogle}>Continue with Google</Button>
             </div>
           </Card>
         ) : (
@@ -814,8 +865,8 @@ export default function TicketMarket() {
         {/* Main Grid */}
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
           {/* LEFT: Inputs */}
-          <Card className="p-5 lg:col-span-1">
-            <SectionTitle title="Your Inputs" />
+            <Card className="p-5 lg:col-span-1">
+            <SectionTitle title="My Inputs" />
             {currentUser ? (
               <div className="space-y-4">
                 <div>
@@ -845,25 +896,12 @@ export default function TicketMarket() {
                         style={{ background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${percent}%, #e5e7eb ${percent}%, #e5e7eb 100%)` }}
                       />
                       <div className="mt-1 flex justify-between text-xs text-gray-500">
-                        <span>0%</span><span className="font-semibold text-indigo-600">{percent}%</span><span>100%</span>
+                        <span>0%</span><span className="font-semibold text-blue-600">{percent}%</span><span>100%</span>
                       </div>
                     </div>
                   </div>
                 )}
-                {currentEvent?.type === 'market' && (
-                  <>
-                    <div>
-                      <Label>Price ($)</Label>
-                      <Input type="number" min={1} step={1} value={selectedMarketPrice ?? ''}
-                        onChange={(e) => setSelectedMarketPrice(Number(e.target.value))} placeholder="120" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Description</Label>
-                      <Input placeholder="Row 70, Thursday night" value={marketDescription} onChange={(e) => setMarketDescription(e.target.value)} />
-                      <div className="text-xs text-gray-500">Price is a hard number; description helps others assess.</div>
-                    </div>
-                  </>
-                )}
+                {/* Market inputs removed; ceiling-only */}
                 <div>
                   <Label>Number of Tickets</Label>
                   <Input value="1" readOnly className="bg-gray-50" />
@@ -974,36 +1012,36 @@ export default function TicketMarket() {
                 const mm = myMarketMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="space-y-3 text-sm">
+                  <div className="text-sm md:grid md:grid-cols-2 md:gap-3 md:overflow-visible flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
                       return (
-                        <div key={i} className="rounded-lg border border-rose-700 bg-rose-700 p-3 text-white">
-                          <div className="mb-2 flex items-center justify-between font-semibold">
-                            <span>{seller.name} ↔ {buyer.name}</span>
+                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-4 text-white snap-start min-w-[85%] md:min-w-0">
+                          <div className="mb-3 flex items-center justify-between">
+                            <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
                             <WeTradedButton onClick={async () => {
                               try {
-                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: 1, p_source: 'market' });
+                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: m.tickets, p_source: 'market' });
                               } catch {}
-                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: 1, timestamp: new Date() }]);
-                              setTotalTradedTickets((prev) => prev + 1);
+                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: m.tickets, timestamp: new Date() }]);
+                              setTotalTradedTickets((prev) => prev + m.tickets);
                             }} />
                           </div>
-                          <div className="grid grid-cols-2 gap-3 text-xs">
+                          <div className="space-y-2 text-sm md:text-base">
                             <div>
-                              <div className="font-semibold mb-1">Seller</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{seller.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{seller.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{seller.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{seller.venmo}</span></div>
+                              <div className="font-semibold">Seller</div>
+                              <div>{seller.name}</div>
+                              <div className="flex items-center gap-2"><span className="truncate">{seller.email}</span><button onClick={()=>copy(seller.email)} aria-label="Copy email"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">{seller.phone}</span><button onClick={()=>copy(seller.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">@{seller.venmo}</span><button onClick={()=>copy(seller.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
                             </div>
                             <div>
-                              <div className="font-semibold mb-1">Buyer</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{buyer.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{buyer.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{buyer.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{buyer.venmo}</span></div>
+                              <div className="font-semibold">Buyer</div>
+                              <div>{buyer.name}</div>
+                              <div className="flex items-center gap-2"><span className="truncate">{buyer.email}</span><button onClick={()=>copy(buyer.email)} aria-label="Copy email"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">{buyer.phone}</span><button onClick={()=>copy(buyer.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">@{buyer.venmo}</span><button onClick={()=>copy(buyer.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
                             </div>
                           </div>
                           {/* price hidden inside ticket per requirements */}
@@ -1018,37 +1056,37 @@ export default function TicketMarket() {
                 const mm = myMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="space-y-3 text-sm">
+                  <div className="text-sm md:grid md:grid-cols-2 md:gap-3 md:overflow-visible flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
                       const agreedPct = m.agreedPct;
                       return (
-                        <div key={i} className="rounded-lg border border-rose-700 bg-rose-700 p-3 text-white">
-                          <div className="mb-2 flex items-center justify-between font-semibold">
-                            <span>{seller.name} ↔ {buyer.name}</span>
+                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-4 text-white snap-start min-w-[85%] md:min-w-0">
+                          <div className="mb-3 flex items-center justify-between">
+                            <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
                             <WeTradedButton onClick={async () => {
                               try {
-                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: 1, p_source: 'ceiling' });
+                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: m.tickets, p_source: 'ceiling' });
                               } catch {}
-                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: 1, timestamp: new Date() }]);
-                              setTotalTradedTickets((prev) => prev + 1);
+                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: m.tickets, timestamp: new Date() }]);
+                              setTotalTradedTickets((prev) => prev + m.tickets);
                             }} />
                           </div>
-                          <div className="grid grid-cols-2 gap-3 text-xs">
+                          <div className="space-y-2 text-sm md:text-base">
                             <div>
-                              <div className="font-semibold mb-1">Seller</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{seller.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{seller.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{seller.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{seller.venmo}</span></div>
+                              <div className="font-semibold">Seller</div>
+                              <div>{seller.name}</div>
+                              <div className="flex items-center gap-2"><span className="truncate">{seller.email}</span><button onClick={()=>copy(seller.email)} aria-label="Copy email"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">{seller.phone}</span><button onClick={()=>copy(seller.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">@{seller.venmo}</span><button onClick={()=>copy(seller.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
                             </div>
                             <div>
-                              <div className="font-semibold mb-1">Buyer</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{buyer.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{buyer.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{buyer.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{buyer.venmo}</span></div>
+                              <div className="font-semibold">Buyer</div>
+                              <div>{buyer.name}</div>
+                              <div className="flex items-center gap-2"><span className="truncate">{buyer.email}</span><button onClick={()=>copy(buyer.email)} aria-label="Copy email"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">{buyer.phone}</span><button onClick={()=>copy(buyer.phone)} aria-label="Copy phone"><Copy size={14} /></button></div>
+                              <div className="flex items-center gap-2"><span className="truncate">@{buyer.venmo}</span><button onClick={()=>copy(buyer.venmo)} aria-label="Copy venmo"><Copy size={14} /></button></div>
                             </div>
                           </div>
                           {/* price hidden inside ticket per requirements */}
@@ -1063,135 +1101,72 @@ export default function TicketMarket() {
 
           {/* My Listings was moved above */}
 
-          {/* MIDDLE: Charts */}
-          <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
-            {currentEvent?.type === 'ceiling' ? (
-              <>
-                <Card className="p-5">
-                  <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} — left bars = sellers, right bars = buyers`} />
-                  <div className="h-80">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={marketDistribution} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis type="number" domain={[-20, 20]} tickFormatter={(v) => Math.abs(Number(v)).toString()} />
-                        <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
-                        <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
-                        <Legend />
-                        <Bar dataKey="seller" name="Sellers" fill="#6366F1" />
-                        <Bar dataKey="buyer"  name="Buyers"  fill="#10B981" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                  {/* Hide 'no postings' message for public FOMO view */}
-                </Card>
-
-                {/* Supply vs Demand chart removed per requirements */}
-              </>
-            ) : (
-              <>
-              <Card className="p-5">
-                  <SectionTitle title="Market Options" subtitle="Discrete supply (sellers) and demand (buyers) at price; hover for details" />
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                  <div className="lg:col-span-2">
-                    <div className="h-72">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
-                          <line x1="5" y1="80" x2="95" y2="80" stroke="#d1d5db" strokeWidth="1" />
-                          {/* price ticks every $100 from domain min..max */}
-                          {(() => {
-                            const prices = marketPoints.map(p => p.price);
-                            const step = 100;
-                            const min = prices.length ? Math.min(...prices) : 0;
-                            const max = prices.length ? Math.max(...prices) : step;
-                            const lo = Math.floor(min / step) * step;
-                            const hi = Math.max(lo + step, Math.ceil(max / step) * step);
-                            const ticks = [] as number[];
-                            for (let v = lo; v <= hi; v += step) ticks.push(v);
-                            return (
-                              <g>
-                                {ticks.map((v, i) => {
-                                  const x = 5 + ((v - lo) / Math.max(1, (hi - lo))) * 90;
-                                  return (
-                                    <g key={i}>
-                                      <line x1={x} y1={80} x2={x} y2={82} stroke="#9ca3af" strokeWidth="0.5" />
-                                      <text x={x} y={86} textAnchor="middle" fontSize="3" fill="#6b7280">${v}</text>
-                                    </g>
-                                  );
-                                })}
-                              </g>
-                            );
-                          })()}
-                          {/* circles */}
-                          {(() => {
-                            const prices = marketPoints.map(p => p.price);
-                            const step = 100;
-                            const min = prices.length ? Math.min(...prices) : 0;
-                            const max = prices.length ? Math.max(...prices) : step;
-                            const lo = Math.floor(min / step) * step;
-                            const hi = Math.max(lo + step, Math.ceil(max / step) * step);
-                            return marketPoints.map((pt, idx) => {
-                              const x = 5 + ((pt.price - lo) / Math.max(1, (hi - lo))) * 90;
-                              const y = 78 - ((idx % 4) * 8); // small vertical staggering
-                              const fill = pt.role === 'seller' ? '#6366F1' : '#10B981';
-                              const stroke = pt.role === 'seller' ? '#4338CA' : '#059669';
-                              const selected = selectedMarketPrice === pt.price;
-                              return (
-                                <g key={idx} onClick={() => setSelectedMarketPrice(pt.price)} style={{ cursor: 'pointer' }}>
-                                  <circle cx={x} cy={y} r={selected ? 5 : 4} fill={fill} stroke={stroke} strokeWidth={selected ? 2 : 1}>
-                                    <title>{pt.username}: ${pt.price}\n{pt.label || '(no description)'}</title>
-                                  </circle>
-                                </g>
-                              );
-                            });
-                          })()}
-                        </svg>
-                      </ResponsiveContainer>
-                    </div>
-                    <div className="mt-2 text-xs text-gray-500">Click a circle to set the price input above</div>
-                  </div>
-                  <div className="grid content-start gap-3 lg:col-span-1">
-                    <Card className="p-4">
-                      <div className="text-sm text-gray-500">Selected Price</div>
-                      <div className="text-2xl font-bold">{selectedMarketPrice ? `$${selectedMarketPrice}` : '—'}</div>
-                    </Card>
-                    <Card className="p-4">
-                      <div className="text-sm text-gray-500">Counts</div>
-                      <div className="text-sm text-gray-700 space-y-1">
-                        <div className="flex items-center justify-between"><span>Buyers</span><span>{marketFiltered.filter(p => p.role==='buyer').length}</span></div>
-                        <div className="flex items-center justify-between"><span>Sellers</span><span>{marketFiltered.filter(p => p.role==='seller').length}</span></div>
-                      </div>
-                    </Card>
-                  </div>
+          {/* Event selector (signed-out): place here under Matches and above Market Distribution */}
+          {!currentUser && (
+            <Card className="mb-4 lg:col-span-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-6 md:items-end">
+                <div className="md:col-span-3">
+                  <Label>Event</Label>
+                  <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
+                    <option value="">Select an event…</option>
+                    {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
+                  </Select>
                 </div>
-              </Card>
+              </div>
+            </Card>
+          )}
 
+          {/* For signed-in users, show event selector here (after Matches) */}
+          {currentUser && (
+            <Card className="mb-4 lg:col-span-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-6 md:items-end">
+                <div className="md:col-span-3">
+                  <Label>Event</Label>
+                  <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
+                    <option value="">Select an event…</option>
+                    {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
+                  </Select>
+                </div>
+                {currentUser && (
+                  <>
+                    <div className="md:col-span-2">
+                      <Label>Create an Event</Label>
+                      <Input placeholder="Event name" value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} />
+                    </div>
+                    <div>
+                      <Label>Face Value</Label>
+                      <Input type="number" placeholder="Face Value $" value={newEventPrice} onChange={(e)=>setNewEventPrice(Number(e.target.value))} />
+                    </div>
+                  </>
+                )}
+              </div>
+            </Card>
+          )}
+
+          {/* MIDDLE: Charts (Market Distribution only) */}
+          <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
+            {eventId ? (
               <Card className="p-5">
-                <SectionTitle title="Average Price" subtitle="Simple average across recent postings (market events)" />
-                <div className="h-60">
+                <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} — left bars = sellers, right bars = buyers`} />
+                <div className="h-80">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={(() => {
-                      const data = marketFiltered.slice().reverse();
-                      const buckets: Record<string, { sum: number; n: number }> = {};
-                      for (const r of data) {
-                        const t = r.created_at ? new Date(r.created_at) : new Date();
-                        const key = `${t.getFullYear()}-${t.getMonth()+1}-${t.getDate()} ${t.getHours()}:00`;
-                        if (!buckets[key]) buckets[key] = { sum: 0, n: 0 };
-                        buckets[key].sum += r.price; buckets[key].n += 1;
-                      }
-                      return Object.entries(buckets).sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>({ t:k, avg: Math.round((v.sum/v.n)*100)/100 }));
-                    })()} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                    <BarChart data={marketDistribution} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="t" tick={{ fontSize: 10 }} />
-                      <YAxis allowDecimals={true} />
-                      <Tooltip />
+                      <XAxis type="number" domain={[-20, 20]} tickFormatter={(v) => Math.abs(Number(v)).toString()} />
+                      <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
+                      <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
                       <Legend />
-                      <Line type="monotone" dataKey="avg" name="Avg Price" stroke="#4f46e5" dot={false} />
-                    </LineChart>
+                      <Bar dataKey="seller" name="Sellers" fill="#3B82F6" />
+                      <Bar dataKey="buyer"  name="Buyers"  fill="#10B981" />
+                    </BarChart>
                   </ResponsiveContainer>
                 </div>
-                {/* Hide 'no postings' message for public FOMO view */}
               </Card>
-              </>
+            ) : (
+              <Card className="p-5">
+                <SectionTitle title="Market Distribution" subtitle="Select an event to see the live market" />
+                <div className="text-sm text-gray-500">No event selected.</div>
+              </Card>
             )}
           </div>
 
@@ -1202,7 +1177,7 @@ export default function TicketMarket() {
               <div className="max-h-64 space-y-3 overflow-y-auto rounded-lg bg-gray-50 p-3">
                 {chat.map((c) => (
                   <div key={c.id} className="text-sm">
-                    <div className="font-semibold text-indigo-600">{c.username}</div>
+                    <div className="font-semibold text-blue-600">{c.username}</div>
                     <div className="text-gray-700 break-words">{c.message}</div>
                     <div className="text-xs text-gray-500">{new Date(c.created_at).toLocaleTimeString()}</div>
                   </div>
@@ -1385,6 +1360,40 @@ export default function TicketMarket() {
           </Card>
         )}
       </div>
+
+      {/* Banner modal with video */}
+      {showBanner && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowBanner(false)}>
+          <div className="relative w-full max-w-3xl rounded-2xl bg-white p-5 shadow" onClick={(e) => e.stopPropagation()}>
+            <button className="absolute right-3 top-3 text-gray-500 hover:text-gray-700" aria-label="Close" onClick={() => setShowBanner(false)}>
+              <X size={18} />
+            </button>
+            <h3 className="mb-2 text-lg font-semibold">Ticketmatch</h3>
+            <div className="mb-4 text-base md:text-lg text-gray-700 leading-relaxed">
+              <p>
+                Trade tickets with data and automation; born out of necessity at Wharton as an MVP for
+                {' '}<a href="https://mbamove.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">mbamove.com</a>.
+              </p>
+              <p className="mt-2">
+                <a href="https://linkedin.com/andrewjbilden" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Andrew J. Bilden, WG26</a>
+              </p>
+            </div>
+            <div className="aspect-video w-full">
+              <iframe
+                className="h-full w-full rounded-lg"
+                width="560"
+                height="315"
+                src="https://www.youtube.com/embed/vN5r8brp1Bo?si=ZgKcDPTtLhTr6umL"
+                title="YouTube video player"
+                frameBorder="0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Slider thumb styling */}
       <style jsx>{`
