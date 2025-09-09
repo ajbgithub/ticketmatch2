@@ -41,6 +41,18 @@ begin
   return new;
 end;$$;
 
+-- RPC: delete event with admin credentials
+create or replace function public.tm_delete_event(
+  p_username text, p_password text,
+  p_id text
+) returns void language plpgsql security definer as $$
+begin
+  if not exists (select 1 from public.admins where username = p_username and password = p_password) then
+    raise exception 'unauthorized';
+  end if;
+  delete from public.events where id = p_id;
+end;$$;
+
 drop trigger if exists trg_market_postings_updated_at on public.market_postings;
 create trigger trg_market_postings_updated_at
 before update on public.market_postings
@@ -66,6 +78,11 @@ create table if not exists public.admins (
 
 insert into public.admins (username, password)
 values ('admin','marketmaker')
+on conflict (username) do update set password = excluded.password;
+
+-- Seed admin account for mbamoveteam@gmail.com (same demo password)
+insert into public.admins (username, password)
+values ('mbamoveteam@gmail.com','marketmaker')
 on conflict (username) do update set password = excluded.password;
 
 -- RPC: admin login
@@ -100,12 +117,29 @@ begin
   end if;
 end;$$;
 
+-- Profiles extras (if using a profiles table managed elsewhere)
+do $$ begin
+  if exists (select 1 from information_schema.tables where table_schema='public' and table_name='profiles') then
+    begin
+      alter table public.profiles add column if not exists bio text;
+    exception when others then null; end;
+  end if;
+end $$;
+
 -- RPC: record a successful mutual trade between two parties
 create or replace function public.tm_we_traded(
-  p_buyer text, p_seller text, p_event_id text, p_price numeric, p_tickets int
-) returns void language sql security definer as $$
+  p_buyer text,
+  p_seller text,
+  p_event_id text,
+  p_price numeric,
+  p_tickets int,
+  p_source text default 'market'
+) returns void
+language sql
+security definer
+as $$
   insert into public.trades(event_id, source, buyer_id, seller_id, price, tickets)
-  values (p_event_id, 'market', p_buyer, p_seller, p_price, p_tickets);
+  values (p_event_id, coalesce(p_source, 'market'), p_buyer, p_seller, p_price, p_tickets);
 $$;
 
 -- RLS: allow public read of events and market_postings (for FOMO views)
@@ -137,6 +171,13 @@ do $$ begin
       for update to authenticated
       using (email = auth.email())
       with check (email = auth.email());
+  end if;
+end $$;
+
+-- Public read policy for trades (analytics/FOMO)
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='trades' and policyname='trades_select_all') then
+    create policy trades_select_all on public.trades for select using (true);
   end if;
 end $$;
 
