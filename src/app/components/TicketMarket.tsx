@@ -204,6 +204,12 @@ export default function TicketMarket() {
   const [serverEvents, setServerEvents] = useState<EventItem[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
+  // My listings (filtered to current user_id)
+  type ListingItem = (
+    { source: 'ceiling'; id: string; label: string; role: Role; percent: number; tickets: number } |
+    { source: 'market';  id: string; label: string; role: Role; price: number;  tickets: number }
+  );
+  const [myListings, setMyListings] = useState<ListingItem[]>([]);
 
   // UI state
   const [totalTradedTickets, setTotalTradedTickets] = useState<number>(17);
@@ -504,6 +510,35 @@ export default function TicketMarket() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Load my listings for the signed-in user
+  const refreshMyListings = async () => {
+    try {
+      const uid = (await supabase.auth.getSession()).data.session?.user?.id;
+      if (!uid) { setMyListings([]); return; }
+      const [a, b] = await Promise.all([
+        supabase.from('postings_public').select('*').eq('user_id', uid).order('updated_at', { ascending: false }),
+        supabase.from('market_postings').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
+      ]);
+      const aList: ListingItem[] = (a.data || []).map((r: any) => ({
+        source: 'ceiling', id: String(r.id), label: (serverEvents.find((e) => e.id === r.event_id)?.label) || r.event_id,
+        role: r.role, percent: r.percent, tickets: r.tickets,
+      }));
+      const bList: ListingItem[] = (b.data || []).map((r: any) => ({
+        source: 'market', id: String(r.id), label: (serverEvents.find((e) => e.id === r.event_id)?.label) || r.event_id,
+        role: r.role, price: Number(r.price) || 0, tickets: r.tickets ?? 1,
+      }));
+      setMyListings([...bList, ...aList]);
+    } catch (e) {
+      console.warn('refreshMyListings failed', e);
+    }
+  };
+
+  // Keep my listings in sync with auth/profile changes
+  useEffect(() => {
+    refreshMyListings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.id, serverEvents.length]);
+
   const refreshPostings = async () => {
     const { data, error } = await supabase
       .from('postings_public')
@@ -696,6 +731,7 @@ export default function TicketMarket() {
     if (!currentUser) { alert('Please sign in first.'); return; }
 
     const row = {
+      user_id: currentUser.id,
       device_id: getDeviceId(),
       event_id: eventId,
       role,
@@ -742,6 +778,7 @@ export default function TicketMarket() {
       // success banner
       setPostNotice("Success! Your post is live. Ensure to review My Listings if you've traded a ticket already.");
       setTimeout(() => setPostNotice(''), 5000);
+      refreshMyListings();
     } catch (err: any) {
       console.error('Post creation error:', err);
       alert(`Post failed: ${err.message || 'Unknown error'}`);
@@ -753,11 +790,11 @@ export default function TicketMarket() {
       if (source === 'market') {
         const { error } = await supabase.from('market_postings').delete().eq('id', id);
         if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
-        else { setMarketPostings((prev) => prev.filter((p) => p.id !== id)); }
+        else { setMarketPostings((prev) => prev.filter((p) => p.id !== id)); refreshMyListings(); }
       } else {
         const { error } = await supabase.from('postings_public').delete().eq('id', id);
         if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
-        else { setPostings((prev) => prev.filter((p) => p.id !== id)); }
+        else { setPostings((prev) => prev.filter((p) => p.id !== id)); refreshMyListings(); }
       }
     } catch (err: any) {
       console.error('Delete error:', err);
@@ -865,20 +902,7 @@ export default function TicketMarket() {
   const myMatches = currentEvent?.type === 'market' ? [] : getMatches();
   const myMarketMatches = currentEvent?.type === 'market' ? getMarketMatches() : [];
 
-  type ListingItem = (
-    { source: 'ceiling'; id: string; label: string; role: Role; percent: number; tickets: number } |
-    { source: 'market';  id: string; label: string; role: Role; price: number;  tickets: number }
-  );
-  const myListings: ListingItem[] = useMemo(() => {
-    if (!currentUser) return [] as ListingItem[];
-    const a: ListingItem[] = postings
-      .filter(p => p.userUid === currentUser.id)
-      .map(p => ({ source: 'ceiling' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, percent: p.percent, tickets: p.tickets }));
-    const b: ListingItem[] = marketPostings
-      .filter(p => p.userUid === currentUser.id)
-      .map(p => ({ source: 'market' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, price: p.price, tickets: p.tickets }));
-    return [...b, ...a];
-  }, [currentUser, postings, marketPostings, allEvents]);
+  // myListings now loaded via refreshMyListings
 
   /* -------- Market options (for market-type events) -------- */
   // For US Open – draw real circles from market postings (no fakes)
@@ -1049,6 +1073,7 @@ export default function TicketMarket() {
                         if (!ok) { alert('Event not found and could not be created. Please seed events via SQL or admin RPC.'); return; }
                         try {
                           const row = {
+                            user_id: currentUser.id,
                             device_id: getDeviceId(),
                             event_id: eventId,
                             role,
@@ -1077,6 +1102,7 @@ export default function TicketMarket() {
                             setPostNotice('Success! Your ticket is live.');
                             setTimeout(() => setPostNotice(''), 5000);
                             setMarketDescription('');
+                            refreshMyListings();
                           }
                         } catch (e: any) {
                           alert(`Failed to post: ${e?.message || 'Unknown error'}`);
