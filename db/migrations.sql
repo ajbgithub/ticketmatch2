@@ -12,8 +12,7 @@ create table if not exists public.events (
 -- Seed base events (safe to re-run)
 insert into public.events (id, label, type, price)
 values
-  ('usopen', 'US Open (Market Pricing)', 'market', null),
-  ('wp',     'White Party - Member Price $50', 'ceiling', 50)
+  ('colombia-trek', 'Colombia Trek - Face Value $0', 'ceiling', 0)
 on conflict (id) do nothing;
 
 -- 2) Market postings (for price-based events like US Open)
@@ -122,6 +121,14 @@ do $$ begin
   if exists (select 1 from information_schema.tables where table_schema='public' and table_name='profiles') then
     begin
       alter table public.profiles add column if not exists bio text;
+      -- Relax cohort check to permit school names as used by the app
+      begin
+        alter table public.profiles drop constraint if exists profiles_cohort_check;
+      exception when others then null; end;
+      begin
+        alter table public.profiles add constraint profiles_cohort_check
+        check (cohort in ('Wharton','Penn','HBS','GSB','WG26','WG27'));
+      exception when others then null; end;
     exception when others then null; end;
   end if;
 end $$;
@@ -178,6 +185,11 @@ end $$;
 do $$ begin
   if not exists (select 1 from pg_policies where schemaname='public' and tablename='trades' and policyname='trades_select_all') then
     create policy trades_select_all on public.trades for select using (true);
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='trades' and policyname='trades_insert_auth') then
+    create policy trades_insert_auth on public.trades
+      for insert to authenticated
+      with check (true);
   end if;
 end $$;
 
