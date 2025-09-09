@@ -18,6 +18,7 @@ on conflict (id) do nothing;
 -- 2) Market postings (for price-based events like US Open)
 create table if not exists public.market_postings (
   id bigint generated always as identity primary key,
+  user_id uuid,
   device_id text not null,
   event_id text not null references public.events(id) on delete cascade,
   role text not null check (role in ('buyer','seller')),
@@ -56,6 +57,16 @@ drop trigger if exists trg_market_postings_updated_at on public.market_postings;
 create trigger trg_market_postings_updated_at
 before update on public.market_postings
 for each row execute function public.set_market_postings_updated_at();
+
+-- Add unique index to support ON CONFLICT(device_id,event_id,role) on postings_public (if table exists)
+do $$ begin
+  if exists (select 1 from information_schema.tables where table_schema='public' and table_name='postings_public') then
+    begin
+      create unique index if not exists uq_postings_public_conflict
+        on public.postings_public(device_id, event_id, role);
+    exception when others then null; end;
+  end if;
+end $$;
 
 -- 3) Trades
 create table if not exists public.trades (
@@ -130,6 +141,37 @@ do $$ begin
         check (cohort in ('Wharton','Penn','HBS','GSB','WG26','WG27'));
       exception when others then null; end;
     exception when others then null; end;
+  end if;
+end $$;
+
+-- Profiles RLS policies (self-access only)
+do $$ begin
+  if exists (select 1 from information_schema.tables where table_schema='public' and table_name='profiles') then
+    begin
+      alter table public.profiles enable row level security;
+    exception when others then null; end;
+
+    if not exists (
+      select 1 from pg_policies where schemaname='public' and tablename='profiles' and policyname='profiles_select_own'
+    ) then
+      create policy profiles_select_own on public.profiles for select to authenticated
+        using (id::text = auth.uid()::text);
+    end if;
+
+    if not exists (
+      select 1 from pg_policies where schemaname='public' and tablename='profiles' and policyname='profiles_insert_own'
+    ) then
+      create policy profiles_insert_own on public.profiles for insert to authenticated
+        with check (id::text = auth.uid()::text);
+    end if;
+
+    if not exists (
+      select 1 from pg_policies where schemaname='public' and tablename='profiles' and policyname='profiles_update_own'
+    ) then
+      create policy profiles_update_own on public.profiles for update to authenticated
+        using (id::text = auth.uid()::text)
+        with check (id::text = auth.uid()::text);
+    end if;
   end if;
 end $$;
 
