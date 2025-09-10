@@ -180,7 +180,7 @@ export default function OnboardingPage() {
             <button
               className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50"
               onClick={save}
-              disabled={loading || !uid || needsProfile === false}
+              disabled={loading || !uid || needsProfile}
             >
               Save Profile
             </button>
@@ -196,4 +196,3 @@ export default function OnboardingPage() {
     </div>
   );
 }
-

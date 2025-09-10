@@ -505,11 +505,9 @@ export default function TicketMarket() {
 
   /* -------- Google Sign-In -------- */
   const signInWithGoogle = async () => {
-    const redirectTo = typeof window !== 'undefined' ? `${window.location.origin}/onboarding` : undefined;
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo },
-    });
+    // Redirect back to the app root; modal will guide profile completion
+    const redirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+    await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
   };
 
   /* -------- Save Profile -------- */
