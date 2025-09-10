@@ -285,6 +285,32 @@ returns jsonb language sql security definer as $$
   select jsonb_build_object('ok', exists(select 1 from public.admins a where a.username = p_username and a.password = p_password));
 $$;
 
+-- 10) Auth onboarding helper: non-failing seed of profiles for new users
+-- Call from Supabase Auth → Hooks → On sign-up:
+--   select public.tm_seed_profile(new.id::uuid, new.email, coalesce(new.raw_user_meta_data->>'full_name', new.email));
+-- This function is SECURITY DEFINER and swallows errors to avoid blocking OAuth redirects.
+create or replace function public.tm_seed_profile(
+  p_user uuid,
+  p_email text default null,
+  p_username text default null
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- Insert a minimal row; ignore if it already exists
+  insert into public.profiles (id, username, recovery_email)
+  values (p_user, p_username, p_email)
+  on conflict (id) do nothing;
+exception
+  when others then
+    -- Never fail sign-up due to profile seed issues
+    null;
+end;
+$$;
+
+
 -- Create event (admin credentials required)
 create or replace function public.tm_create_event(
   p_username text, p_password text,

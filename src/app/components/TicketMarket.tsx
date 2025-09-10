@@ -5,7 +5,7 @@ import {
   Bar, BarChart, CartesianGrid, Legend, Line, LineChart,
   ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { X, MessageCircle, Trophy, ChevronDown, ChevronUp, Users, Share2 } from 'lucide-react';
+import { X, MessageCircle, Trophy, ChevronDown, ChevronUp, Users } from 'lucide-react';
 import { supabase } from '@/lib/supabaseClient';
 
 /* =========================
@@ -44,14 +44,8 @@ const DeleteButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
     <X size={16} />
   </button>
 );
-const WeTradedButton: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ onClick, disabled }) => (
-  <button
-    onClick={onClick}
-    disabled={disabled}
-    className={`rounded-lg px-3 py-2 text-sm font-semibold text-white transition ${disabled ? 'bg-green-400 opacity-60 cursor-not-allowed' : 'bg-green-600 hover:bg-green-500'}`}
-  >
-    We Traded!
-  </button>
+const WeTradedButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
+  <button onClick={onClick} className="rounded-lg px-3 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-500 transition">We Traded!</button>
 );
 
 /* =========================
@@ -72,7 +66,6 @@ interface Profile {
 interface Posting {
   id: string;
   userId: string;      // device_id
-  userUid?: string;    // supabase auth user_id
   eventId: string;     // event_id
   role: Role;
   percent: number;     // 0..100
@@ -136,51 +129,12 @@ const isValidE164 = (e164: string): boolean => /^\+\d{6,16}$/.test((e164 || '').
 const normalizeVenmo = (h: string): string => (h || '').trim().replace(/^@/, '');
 // Allow letters, numbers, and common symbols (2..64 chars)
 const isValidVenmo = (h: string): boolean => /^[A-Za-z0-9!@#$%^&*()_+\-=.:@]{2,64}$/.test(normalizeVenmo(h));
-const copy = (text?: string) => {
-  if (!text) return;
-  const fallbackCopy = () => {
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    } catch {}
-  };
-  try {
-    // Use Clipboard API when available and in a secure context; fallback otherwise
-    if (navigator.clipboard && (window as any).isSecureContext) {
-      navigator.clipboard.writeText(text).catch(fallbackCopy);
-    } else {
-      fallbackCopy();
-    }
-  } catch {
-    fallbackCopy();
-  }
-};
-
-// Parse an E.164 phone into country code + local digits (best-effort)
-const parseE164 = (e164?: string): { code: string; digits: string } => {
-  const v = (e164 || '').trim();
-  if (!v.startsWith('+')) return { code: AREA_CODES[0], digits: onlyDigits(v) };
-  // Choose the longest matching known code
-  let best = AREA_CODES[0];
-  for (const c of AREA_CODES) {
-    if (v.startsWith(c) && c.length > best.length) best = c;
-  }
-  const digits = onlyDigits(v.slice(best.length));
-  return { code: best, digits };
-};
+const copy = (text?: string) => text && navigator.clipboard?.writeText(text);
 
 // Market posting (price-based) for market-type events (e.g., US Open)
 interface MarketPosting {
   id: string;
   userId: string;      // device_id
-  userUid?: string;    // supabase auth user_id
   eventId: string;     // event_id
   role: Role;          // buyer or seller
   price: number;       // explicit price
@@ -204,12 +158,6 @@ export default function TicketMarket() {
   const [serverEvents, setServerEvents] = useState<EventItem[]>([]);
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [chat, setChat] = useState<ChatMessage[]>([]);
-  // My listings (filtered to current user_id)
-  type ListingItem = (
-    { source: 'ceiling'; id: string; label: string; role: Role; percent: number; tickets: number } |
-    { source: 'market';  id: string; label: string; role: Role; price: number;  tickets: number }
-  );
-  const [myListings, setMyListings] = useState<ListingItem[]>([]);
 
   // UI state
   const [totalTradedTickets, setTotalTradedTickets] = useState<number>(17);
@@ -244,8 +192,8 @@ export default function TicketMarket() {
     });
     return Array.from(byId.values());
   }, [serverEvents, extraEvents]);
-  // Blank default so user actively selects an event
-  const [eventId, setEventId] = useState<string>('');
+  // Default to Colombia Trek
+  const [eventId, setEventId] = useState<string>('colombia-trek');
   const [role, setRole] = useState<Role>('buyer');
   const [percent, setPercent] = useState<number>(100);
   const [marketDescription, setMarketDescription] = useState<string>('');
@@ -256,7 +204,6 @@ export default function TicketMarket() {
   const [newEventName, setNewEventName] = useState<string>('');
   const [newEventType, setNewEventType] = useState<EventType>('market');
   const [newEventPrice, setNewEventPrice] = useState<number>(50);
-  const [weTradedSet, setWeTradedSet] = useState<Set<string>>(new Set());
 
   const currentEvent = useMemo(() => allEvents.find((e) => e.id === eventId), [allEvents, eventId]);
   const eventPrice = currentEvent?.price ?? 0;
@@ -270,9 +217,8 @@ export default function TicketMarket() {
     return BASE_EVENTS[BASE_EVENTS.length - 1].id; // fallback
   }, [serverEvents]);
 
-  // Do not auto-select for signed-out; allow signed-in to auto-select if none chosen
   useEffect(() => {
-    if (currentUser && !eventId && latestEventId) setEventId(latestEventId);
+    if (!currentUser && latestEventId && eventId !== latestEventId) setEventId(latestEventId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestEventId, currentUser]);
 
@@ -327,19 +273,7 @@ export default function TicketMarket() {
             school_email: prof.wharton_email ?? '',
             bio: prof.bio ?? '',
           });
-          // Ensure we persist the auth email to profiles.recovery_email for notifications/support
-          try {
-            if (!prof.recovery_email || prof.recovery_email !== authEmail) {
-              await supabase.from('profiles').update({ recovery_email: authEmail }).eq('id', userId);
-            }
-          } catch {}
-          // Require: name, phone, Venmo, school .edu email, and bio
-          const needs =
-            !isValidUsername((prof.username || '').trim()) ||
-            !isValidE164(prof.phone_e164 || '') ||
-            !isValidVenmo(prof.venmo_handle || '') ||
-            !(prof.wharton_email || '').endsWith('.edu') ||
-            !(prof.bio ?? '').trim();
+          const needs = !prof.username || !prof.phone_e164 || !prof.venmo_handle || !(prof.wharton_email || '').endsWith('.edu') || !(prof.bio ?? '').trim();
           if (needs) {
             setPfFullName(prof.username ?? '');
             setPfEmail(authEmail);
@@ -347,18 +281,11 @@ export default function TicketMarket() {
             setPfVenmo(prof.venmo_handle ?? '');
             setPfSchoolEmail(prof.wharton_email ?? '');
             setPfBio(prof.bio ?? '');
-            try {
-              const ph = parseE164(prof.phone_e164);
-              setPfAreaCode(ph.code);
-              setPfPhoneDigits(ph.digits);
-            } catch {}
             setShowProfileModal(true);
           }
         } else {
-          // No profile row yet: create one with recovery_email captured from auth
-          try {
-            await supabase.from('profiles').upsert({ id: userId, recovery_email: authEmail }, { onConflict: 'id' });
-          } catch {}
+          setPfEmail(authEmail);
+          setShowProfileModal(true);
         }
       }
 
@@ -377,7 +304,6 @@ export default function TicketMarket() {
                 {
                   id: String(r.id),
                   userId: r.device_id,
-                  userUid: r.user_id ?? undefined,
                   eventId: r.event_id,
                   role: r.role,
                   percent: r.percent,
@@ -408,7 +334,7 @@ export default function TicketMarket() {
               return [
                 ...rest,
                 {
-                  id: String(r.id), userId: r.device_id, userUid: r.user_id ?? undefined, eventId: r.event_id, role: r.role,
+                  id: String(r.id), userId: r.device_id, eventId: r.event_id, role: r.role,
                   price: Number(r.price) || 0, tickets: r.tickets ?? 1, description: r.description ?? '',
                   name: r.username, phone: r.phone_e164, cohort: r.cohort ?? undefined,
                   venmo: r.venmo_handle ?? undefined, email: r.email ?? r.email_address ?? undefined,
@@ -461,19 +387,7 @@ export default function TicketMarket() {
             school_email: prof.wharton_email ?? '',
             bio: prof.bio ?? '',
           });
-          // Persist auth email to profiles.recovery_email if missing or outdated
-          try {
-            if (!prof.recovery_email || prof.recovery_email !== authEmail2) {
-              await supabase.from('profiles').update({ recovery_email: authEmail2 }).eq('id', sess.user.id);
-            }
-          } catch {}
-          // Require: name, phone, Venmo, school .edu email, and bio
-          const needs =
-            !isValidUsername((prof.username || '').trim()) ||
-            !isValidE164(prof.phone_e164 || '') ||
-            !isValidVenmo(prof.venmo_handle || '') ||
-            !(prof.wharton_email || '').endsWith('.edu') ||
-            !(prof.bio ?? '').trim();
+          const needs = !prof.username || !prof.phone_e164 || !prof.venmo_handle || !(prof.wharton_email || '').endsWith('.edu') || !(prof.bio ?? '').trim();
           if (needs) {
             setPfFullName(prof.username ?? '');
             setPfEmail(authEmail2);
@@ -481,18 +395,11 @@ export default function TicketMarket() {
             setPfVenmo(prof.venmo_handle ?? '');
             setPfSchoolEmail(prof.wharton_email ?? '');
             setPfBio(prof.bio ?? '');
-            try {
-              const ph = parseE164(prof.phone_e164);
-              setPfAreaCode(ph.code);
-              setPfPhoneDigits(ph.digits);
-            } catch {}
             setShowProfileModal(true);
           }
         } else {
-          // Seed profile with recovery_email on first sign-in
-          try {
-            await supabase.from('profiles').upsert({ id: sess.user.id, recovery_email: authEmail2 }, { onConflict: 'id' });
-          } catch {}
+          setPfEmail(authEmail2);
+          setShowProfileModal(true);
         }
       }
       if (evt === 'SIGNED_OUT') {
@@ -510,35 +417,6 @@ export default function TicketMarket() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Load my listings for the signed-in user
-  const refreshMyListings = async () => {
-    try {
-      const uid = (await supabase.auth.getSession()).data.session?.user?.id;
-      if (!uid) { setMyListings([]); return; }
-      const [a, b] = await Promise.all([
-        supabase.from('postings_public').select('*').eq('user_id', uid).order('updated_at', { ascending: false }),
-        supabase.from('market_postings').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
-      ]);
-      const aList: ListingItem[] = (a.data || []).map((r: any) => ({
-        source: 'ceiling', id: String(r.id), label: (serverEvents.find((e) => e.id === r.event_id)?.label) || r.event_id,
-        role: r.role, percent: r.percent, tickets: r.tickets,
-      }));
-      const bList: ListingItem[] = (b.data || []).map((r: any) => ({
-        source: 'market', id: String(r.id), label: (serverEvents.find((e) => e.id === r.event_id)?.label) || r.event_id,
-        role: r.role, price: Number(r.price) || 0, tickets: r.tickets ?? 1,
-      }));
-      setMyListings([...bList, ...aList]);
-    } catch (e) {
-      console.warn('refreshMyListings failed', e);
-    }
-  };
-
-  // Keep my listings in sync with auth/profile changes
-  useEffect(() => {
-    refreshMyListings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser?.id, serverEvents.length]);
-
   const refreshPostings = async () => {
     const { data, error } = await supabase
       .from('postings_public')
@@ -553,7 +431,6 @@ export default function TicketMarket() {
         data.map((r: any) => ({
           id: String(r.id),
           userId: r.device_id,
-          userUid: r.user_id ?? undefined,
           eventId: r.event_id,
           role: r.role,
           percent: r.percent,
@@ -577,7 +454,7 @@ export default function TicketMarket() {
     if (data) {
       setMarketPostings(
         data.map((r: any) => ({
-          id: String(r.id), userId: r.device_id, userUid: r.user_id ?? undefined, eventId: r.event_id, role: r.role,
+          id: String(r.id), userId: r.device_id, eventId: r.event_id, role: r.role,
           price: Number(r.price) || 0, tickets: r.tickets ?? 1, description: r.description ?? '',
           name: r.username, phone: r.phone_e164, cohort: r.cohort ?? undefined,
           venmo: r.venmo_handle ?? undefined, email: r.email ?? r.email_address ?? undefined,
@@ -624,103 +501,51 @@ export default function TicketMarket() {
 
   /* -------- Google Sign-In -------- */
   const signInWithGoogle = async () => {
-    try {
-      await supabase.auth.signInWithOAuth({ provider: 'google' });
-    } catch (e) {
-      console.error('Google sign-in failed', e);
-      alert('Unable to start Google sign-in. Please try again.');
-    }
+    const redirectTo = typeof window !== 'undefined' ? window.location.origin : undefined;
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo },
+    });
   };
 
-  /* -------- Save Profile (validate only changed fields) -------- */
-  const [pfSuccess, setPfSuccess] = useState<string>('');
+  /* -------- Save Profile -------- */
   const saveProfile = async () => {
     setPfError('');
-    setPfSuccess('');
+    const name = normalizeUsername(pfFullName);
+    if (!isValidUsername(name)) { setPfError('Please enter First Last'); return; }
+    if (!pfSchoolEmail.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
+    const ven = normalizeVenmo(pfVenmo);
+    if (!isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
+    const e164 = buildE164(pfAreaCode, pfPhoneDigits);
+    if (!isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
+    if (!pfBio.trim()) { setPfError('Bio is required'); return; }
 
-    const uid = (await supabase.auth.getSession()).data.session?.user?.id;
-    if (!uid || !currentUser) { setPfError('Not signed in'); return; }
-
-    // Effective values (fallback to existing profile if input left blank)
-    const nameRaw = pfFullName.trim() || currentUser.full_name;
-    const school = (pfSchool || currentUser.school) as any;
-    const schoolEmail = (pfSchoolEmail.trim() || currentUser.school_email).trim();
-    const ven = normalizeVenmo(pfVenmo.trim() || currentUser.venmo_handle);
-    let e164 = currentUser.phone_e164;
-    if (pfPhoneDigits.trim()) {
-      e164 = buildE164(pfAreaCode, pfPhoneDigits);
-    }
-    const bio = pfBio !== '' ? pfBio : currentUser.bio;
-
-    // Validate only changed fields (general case)
-    if (pfFullName.trim() && !isValidUsername(normalizeUsername(nameRaw))) { setPfError('Please enter First Last'); return; }
-    if (pfSchoolEmail.trim() && !schoolEmail.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
-    if (pfVenmo.trim() && !isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
-    if (pfPhoneDigits.trim() && !isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
-
-    // When completing initial profile, require all fields
-    if (showProfileModal) {
-      if (!isValidUsername(normalizeUsername(nameRaw))) { setPfError('Please enter First Last'); return; }
-      if (!isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
-      if (!schoolEmail.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
-      if (!(bio || '').trim()) { setPfError('Bio is required'); return; }
-      if (!ven || !isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
-    }
+    const { data: s } = await supabase.auth.getSession();
+    const uid = s?.session?.user?.id;
+    if (!uid) { setPfError('Not signed in'); return; }
 
     try {
       const { error } = await supabase.from('profiles').upsert({
         id: uid,
-        username: normalizeUsername(nameRaw),
-        cohort: school,
+        username: name,
+        cohort: pfSchool, // reuse as school
         phone_e164: e164,
         venmo_handle: ven,
-        wharton_email: schoolEmail,
-        recovery_email: currentUser.email,
-        bio,
+        wharton_email: pfSchoolEmail,
+        bio: pfBio,
       }, { onConflict: 'id' });
       if (error) { setPfError(error.message); return; }
-
       setCurrentUser({
         id: uid,
-        full_name: normalizeUsername(nameRaw),
-        email: currentUser.email,
-        school,
+        full_name: name,
+        email: pfEmail,
+        school: pfSchool,
         phone_e164: e164,
         venmo_handle: ven,
-        school_email: schoolEmail,
-        bio,
+        school_email: pfSchoolEmail,
+        bio: pfBio,
       });
-      // Sync contact details to user's postings so matches reflect immediately
-      const contactEmail = schoolEmail || currentUser.email;
-      try {
-        await Promise.allSettled([
-          supabase.from('postings_public').update({
-            username: normalizeUsername(nameRaw),
-            phone_e164: e164,
-            venmo_handle: ven,
-            email: contactEmail,
-          }).eq('user_id', uid),
-          supabase.from('market_postings').update({
-            username: normalizeUsername(nameRaw),
-            phone_e164: e164,
-            venmo_handle: ven,
-            email: contactEmail,
-          }).eq('user_id', uid),
-        ]);
-        await Promise.allSettled([refreshPostings(), refreshMarketPostings()]);
-      } catch {}
-
-      // Update transient inputs to reflect saved values (so they show on screen)
-      const parsed = parseE164(e164);
-      setPfAreaCode(parsed.code);
-      setPfPhoneDigits(parsed.digits);
-      setPfFullName(normalizeUsername(nameRaw));
-      setPfVenmo(ven);
-      setPfSchoolEmail(schoolEmail);
-      setPfBio(bio);
-
-      setPfSuccess('Success, your profile is updated!');
-      if (showProfileModal) setShowProfileModal(false);
+      setShowProfileModal(false);
     } catch (e: any) {
       setPfError(e.message || 'Failed to save profile');
     }
@@ -731,7 +556,6 @@ export default function TicketMarket() {
     if (!currentUser) { alert('Please sign in first.'); return; }
 
     const row = {
-      user_id: currentUser.id,
       device_id: getDeviceId(),
       event_id: eventId,
       role,
@@ -741,7 +565,7 @@ export default function TicketMarket() {
       phone_e164: currentUser.phone_e164,
       cohort: currentUser.school,
       venmo_handle: currentUser.venmo_handle,
-      email: currentUser.school_email || currentUser.email,
+      email: currentUser.school_email,
     };
 
     try {
@@ -760,7 +584,6 @@ export default function TicketMarket() {
           {
             id: String(data.id),
             userId: data.device_id,
-            userUid: data.user_id ?? undefined,
             eventId: data.event_id,
             role: data.role,
             percent: data.percent,
@@ -778,7 +601,6 @@ export default function TicketMarket() {
       // success banner
       setPostNotice("Success! Your post is live. Ensure to review My Listings if you've traded a ticket already.");
       setTimeout(() => setPostNotice(''), 5000);
-      refreshMyListings();
     } catch (err: any) {
       console.error('Post creation error:', err);
       alert(`Post failed: ${err.message || 'Unknown error'}`);
@@ -790,11 +612,11 @@ export default function TicketMarket() {
       if (source === 'market') {
         const { error } = await supabase.from('market_postings').delete().eq('id', id);
         if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
-        else { setMarketPostings((prev) => prev.filter((p) => p.id !== id)); refreshMyListings(); }
+        else { setMarketPostings((prev) => prev.filter((p) => p.id !== id)); }
       } else {
         const { error } = await supabase.from('postings_public').delete().eq('id', id);
         if (error) { console.error('Delete error:', error); alert(`Delete failed: ${error.message}`); }
-        else { setPostings((prev) => prev.filter((p) => p.id !== id)); refreshMyListings(); }
+        else { setPostings((prev) => prev.filter((p) => p.id !== id)); }
       }
     } catch (err: any) {
       console.error('Delete error:', err);
@@ -861,8 +683,8 @@ export default function TicketMarket() {
   type Match = { me: Posting; other: Posting; agreedPct: number; tickets: number };
   const getMatches = (): Match[] => {
     if (!currentUser) return [];
-    const mine = postings.filter((p) => p.userUid === currentUser.id && p.eventId === eventId);
-    const others = postings.filter((p) => p.userUid !== currentUser.id && p.eventId === eventId);
+    const mine = postings.filter((p) => p.name === currentUser.full_name && p.eventId === eventId);
+    const others = postings.filter((p) => p.name !== currentUser.full_name && p.eventId === eventId);
     const out: Match[] = [];
     for (const me of mine) {
       const compatible = others.filter((o) =>
@@ -883,8 +705,8 @@ export default function TicketMarket() {
   type MarketMatch = { me: MarketPosting; other: MarketPosting; agreedPrice: number; tickets: number };
   const getMarketMatches = (): MarketMatch[] => {
     if (!currentUser) return [];
-    const mine = marketPostings.filter((p) => p.userUid === currentUser.id && p.eventId === eventId);
-    const others = marketPostings.filter((p) => p.userUid !== currentUser.id && p.eventId === eventId);
+    const mine = marketPostings.filter((p) => p.name === currentUser.full_name && p.eventId === eventId);
+    const others = marketPostings.filter((p) => p.name !== currentUser.full_name && p.eventId === eventId);
     const out: MarketMatch[] = [];
     for (const me of mine) {
       const compatible = others.filter((o) => (me.role === 'buyer' && o.role === 'seller') || (me.role === 'seller' && o.role === 'buyer'));
@@ -902,7 +724,20 @@ export default function TicketMarket() {
   const myMatches = currentEvent?.type === 'market' ? [] : getMatches();
   const myMarketMatches = currentEvent?.type === 'market' ? getMarketMatches() : [];
 
-  // myListings now loaded via refreshMyListings
+  type ListingItem = (
+    { source: 'ceiling'; id: string; label: string; role: Role; percent: number; tickets: number } |
+    { source: 'market';  id: string; label: string; role: Role; price: number;  tickets: number }
+  );
+  const myListings: ListingItem[] = useMemo(() => {
+    if (!currentUser) return [] as ListingItem[];
+    const a: ListingItem[] = postings
+      .filter(p => p.name === currentUser.full_name)
+      .map(p => ({ source: 'ceiling' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, percent: p.percent, tickets: p.tickets }));
+    const b: ListingItem[] = marketPostings
+      .filter(p => p.name === currentUser.full_name)
+      .map(p => ({ source: 'market' as const, id: p.id, label: allEvents.find(e => e.id === p.eventId)?.label || p.eventId, role: p.role, price: p.price, tickets: p.tickets }));
+    return [...b, ...a];
+  }, [currentUser, postings, marketPostings, allEvents]);
 
   /* -------- Market options (for market-type events) -------- */
   // For US Open – draw real circles from market postings (no fakes)
@@ -965,31 +800,67 @@ export default function TicketMarket() {
               <Users className="text-blue-600" size={22} />
               <span className="font-extrabold text-2xl">100+</span>
               <span className="text-gray-700">traders</span>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    if (navigator.share) {
-                      await navigator.share({ url: 'https://ticketmatch.vercel.app', title: 'Ticketmatch' });
-                    } else {
-                      await navigator.clipboard.writeText('https://ticketmatch.vercel.app');
-                      alert('Link copied to clipboard');
-                    }
-                  } catch {}
-                }}
-                className="inline-flex items-center"
-                aria-label="Share Ticketmatch"
-                title="Share"
-              >
-                <Share2 className="text-green-600" size={18} />
-              </button>
             </div>
           </div>
         </div>
 
         {/* Membership removed */}
 
-        {/* Event selection moved below Matches for signed-out users */}
+        {/* Event selection (visible to all); creation requires sign-in */}
+        <Card className="mb-4">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-6 md:items-end">
+            <div className="md:col-span-3">
+              <Label>Event</Label>
+              <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
+                {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
+              </Select>
+            </div>
+            {currentUser && (
+              <>
+                <div className="md:col-span-2">
+                  <Label>Create an Event</Label>
+                  <Input placeholder="Event name" value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} />
+                </div>
+                <div>
+                  <Label>Face Value</Label>
+                  <Input type="number" placeholder="Face Value $" value={newEventPrice} onChange={(e)=>setNewEventPrice(Number(e.target.value))} />
+                </div>
+                <div className="flex items-end">
+                  <Button type="button" onClick={async ()=>{
+                    const name = newEventName.trim();
+                    if (!name) { alert('Please enter an event name'); return; }
+                    const id = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+                    const label = `${name} - Face Value $${newEventPrice}`;
+                    // Similarity check
+                    const norm = (s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+                    const nm = norm(name);
+                    const similar = [...allEvents].some(ev=>{
+                      const el = norm(ev.label);
+                      return el.includes(nm) || nm.includes(el) || ev.id === id;
+                    });
+                    if (similar) { alert('A similar event is already being traded'); return; }
+                    try {
+                      const { error } = await supabase.rpc('tm_create_event', {
+                        p_username: process.env.NEXT_PUBLIC_ADMIN_USER || 'admin',
+                        p_password: process.env.NEXT_PUBLIC_ADMIN_PASS || 'marketmaker',
+                        p_id: id || `evt-${Date.now()}`,
+                        p_label: label,
+                        p_type: 'ceiling',
+                        p_price: newEventPrice,
+                      });
+                      if (error) { alert(error.message); return; }
+                      await refreshEvents();
+                      setNewEventName('');
+                      setEventId(id);
+                    } catch (e:any) {
+                      alert('Event creation not configured');
+                    }
+                  }}>Create</Button>
+                </div>
+              </>
+            )}
+          </div>
+        </Card>
 
         {/* Auth */}
         {!currentUser ? (
@@ -1073,7 +944,6 @@ export default function TicketMarket() {
                         if (!ok) { alert('Event not found and could not be created. Please seed events via SQL or admin RPC.'); return; }
                         try {
                           const row = {
-                            user_id: currentUser.id,
                             device_id: getDeviceId(),
                             event_id: eventId,
                             role,
@@ -1084,14 +954,14 @@ export default function TicketMarket() {
                             phone_e164: currentUser.phone_e164,
                             cohort: currentUser.school,
                             venmo_handle: currentUser.venmo_handle,
-                            email: currentUser.school_email || currentUser.email,
+                            email: currentUser.school_email,
                           };
                           const { data, error } = await supabase.from('market_postings').insert(row).select().single();
                           if (error) { alert(`Post failed: ${error.message}`); return; }
                           if (data) {
                             setMarketPostings((prev) => ([
                               {
-                                id: String(data.id), userId: data.device_id, userUid: data.user_id ?? undefined, eventId: data.event_id, role: data.role,
+                                id: String(data.id), userId: data.device_id, eventId: data.event_id, role: data.role,
                                 price: Number(data.price)||0, tickets: data.tickets ?? 1, description: data.description ?? '',
                                 name: data.username, phone: data.phone_e164, cohort: data.cohort ?? undefined,
                                 venmo: data.venmo_handle ?? undefined, email: data.email ?? undefined,
@@ -1102,7 +972,6 @@ export default function TicketMarket() {
                             setPostNotice('Success! Your ticket is live.');
                             setTimeout(() => setPostNotice(''), 5000);
                             setMarketDescription('');
-                            refreshMyListings();
                           }
                         } catch (e: any) {
                           alert(`Failed to post: ${e?.message || 'Unknown error'}`);
@@ -1164,49 +1033,36 @@ export default function TicketMarket() {
                 const mm = myMarketMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="text-sm flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
+                  <div className="space-y-3 text-sm">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
                       return (
-                        <div key={i} className="rounded-lg border border-purple-700 bg-purple-700 p-4 text-white snap-start min-w-[85%]">
-                          <div className="mb-3 flex items-center justify-between">
-                            <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
-                      {(() => {
-                        const mk = `market:${eventId}:${buyer.userId}:${seller.userId}`;
-                        const disabled = weTradedSet.has(mk);
-                        return (
-                          <WeTradedButton
-                            disabled={disabled}
-                            onClick={async () => {
-                              if (weTradedSet.has(mk)) return;
+                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-3 text-white">
+                          <div className="mb-2 flex items-center justify-between font-semibold">
+                            <span>{seller.name} ↔ {buyer.name}</span>
+                            <WeTradedButton onClick={async () => {
                               try {
-                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: m.tickets, p_source: 'market' });
+                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: 1, p_source: 'market' });
                               } catch {}
-                              setWeTradedSet(prev => new Set(prev).add(mk));
-                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: m.tickets, timestamp: new Date() }]);
-                              setTotalTradedTickets((prev) => prev + m.tickets);
-                              setPostNotice('Thanks for telling us!');
-                              setTimeout(() => setPostNotice(''), 3000);
-                            }}
-                          />
-                        );
-                      })()}
+                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: 1, timestamp: new Date() }]);
+                              setTotalTradedTickets((prev) => prev + 1);
+                            }} />
                           </div>
-                          <div className="space-y-2 text-sm md:text-base">
+                          <div className="grid grid-cols-2 gap-3 text-xs">
                             <div>
-                              <div className="font-semibold">Seller</div>
-                              <div>{seller.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(seller.email)}` : undefined}>{seller.email}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.phone ? `sms:${seller.phone}` : undefined}>{seller.phone}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.venmo ? `https://venmo.com/${normalizeVenmo(seller.venmo)}` : undefined}>@{seller.venmo}</a></div>
+                              <div className="font-semibold mb-1">Seller</div>
+                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{seller.name}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{seller.email}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{seller.phone}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{seller.venmo}</span></div>
                             </div>
                             <div>
-                              <div className="font-semibold">Buyer</div>
-                              <div>{buyer.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(buyer.email)}` : undefined}>{buyer.email}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.phone ? `sms:${buyer.phone}` : undefined}>{buyer.phone}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.venmo ? `https://venmo.com/${normalizeVenmo(buyer.venmo)}` : undefined}>@{buyer.venmo}</a></div>
+                              <div className="font-semibold mb-1">Buyer</div>
+                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{buyer.name}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{buyer.email}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{buyer.phone}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{buyer.venmo}</span></div>
                             </div>
                           </div>
                           {/* price hidden inside ticket per requirements */}
@@ -1221,50 +1077,37 @@ export default function TicketMarket() {
                 const mm = myMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="text-sm flex gap-3 overflow-x-auto snap-x snap-mandatory pr-2">
+                  <div className="space-y-3 text-sm">
                     {mm.slice(0, 50).map((m, i) => {
                       const buyer = m.me.role === 'buyer' ? m.me : m.other;
                       const seller = m.me.role === 'seller' ? m.me : m.other;
                       const agreedPct = m.agreedPct;
                       return (
-                        <div key={i} className="rounded-lg border border-purple-700 bg-purple-700 p-4 text-white snap-start min-w-[85%]">
-                          <div className="mb-3 flex items-center justify-between">
-                            <span className="text-base font-bold">{seller.name} ↔ {buyer.name}</span>
-                            {(() => {
-                              const mk = `ceiling:${eventId}:${buyer.userId}:${seller.userId}`;
-                              const disabled = weTradedSet.has(mk);
-                              return (
-                                <WeTradedButton
-                                  disabled={disabled}
-                                  onClick={async () => {
-                                    if (weTradedSet.has(mk)) return;
-                                    try {
-                                      await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: m.tickets, p_source: 'ceiling' });
-                                    } catch {}
-                                    setWeTradedSet(prev => new Set(prev).add(mk));
-                                    setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: m.tickets, timestamp: new Date() }]);
-                                    setTotalTradedTickets((prev) => prev + m.tickets);
-                                    setPostNotice('Thanks for telling us!');
-                                    setTimeout(() => setPostNotice(''), 3000);
-                                  }}
-                                />
-                              );
-                            })()}
+                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-3 text-white">
+                          <div className="mb-2 flex items-center justify-between font-semibold">
+                            <span>{seller.name} ↔ {buyer.name}</span>
+                            <WeTradedButton onClick={async () => {
+                              try {
+                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: 1, p_source: 'ceiling' });
+                              } catch {}
+                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: 1, timestamp: new Date() }]);
+                              setTotalTradedTickets((prev) => prev + 1);
+                            }} />
                           </div>
-                          <div className="space-y-2 text-sm md:text-base">
+                          <div className="grid grid-cols-2 gap-3 text-xs">
                             <div>
-                              <div className="font-semibold">Seller</div>
-                              <div>{seller.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(seller.email)}` : undefined}>{seller.email}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={seller.phone ? `sms:${seller.phone}` : undefined}>{seller.phone}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={seller.venmo ? `https://venmo.com/${normalizeVenmo(seller.venmo)}` : undefined}>@{seller.venmo}</a></div>
+                              <div className="font-semibold mb-1">Seller</div>
+                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{seller.name}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{seller.email}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{seller.phone}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{seller.venmo}</span></div>
                             </div>
                             <div>
-                              <div className="font-semibold">Buyer</div>
-                              <div>{buyer.name}</div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.email ? `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(buyer.email)}` : undefined}>{buyer.email}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" href={buyer.phone ? `sms:${buyer.phone}` : undefined}>{buyer.phone}</a></div>
-                              <div className="flex items-center gap-2"><a className="truncate underline" target="_blank" rel="noopener noreferrer" href={buyer.venmo ? `https://venmo.com/${normalizeVenmo(buyer.venmo)}` : undefined}>@{buyer.venmo}</a></div>
+                              <div className="font-semibold mb-1">Buyer</div>
+                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{buyer.name}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{buyer.email}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{buyer.phone}</span></div>
+                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{buyer.venmo}</span></div>
                             </div>
                           </div>
                           {/* price hidden inside ticket per requirements */}
@@ -1279,110 +1122,29 @@ export default function TicketMarket() {
 
           {/* My Listings was moved above */}
 
-          {/* Event selector (signed-out): place here under Matches and above Market Distribution */}
-          {!currentUser && (
-            <Card className="mb-4 lg:col-span-3">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-6 md:items-end">
-                <div className="md:col-span-3">
-                  <Label>Event</Label>
-                  <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
-                    <option value="">Select an event…</option>
-                    {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
-                  </Select>
-                </div>
-              </div>
-            </Card>
-          )}
-
-          {/* For signed-in users, show event selector here (after Matches) */}
-          {currentUser && (
-            <Card className="mb-4 lg:col-span-3">
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-6 md:items-end">
-                <div className="md:col-span-3">
-                  <Label>Event</Label>
-                  <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
-                    <option value="">Select an event…</option>
-                    {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
-                  </Select>
-                </div>
-                {currentUser && (
-                  <>
-                    <div className="md:col-span-2">
-                      <Label>Create an Event</Label>
-                      <Input placeholder="Event name" value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} />
-                    </div>
-                    <div>
-                      <Label>Face Value</Label>
-                      <Input type="number" placeholder="Face Value $" value={newEventPrice} onChange={(e)=>setNewEventPrice(Number(e.target.value))} />
-                    </div>
-                    <div>
-                      <Label>&nbsp;</Label>
-                      <Button
-                        type="button"
-                        onClick={async () => {
-                          const name = (newEventName || '').trim();
-                          const price = Number(newEventPrice);
-                          if (!name) { alert('Enter an event name'); return; }
-                          if (!Number.isFinite(price) || price < 0) { alert('Enter a valid face value'); return; }
-                          const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || `evt-${Date.now()}`;
-                          const label = `${name} - Face Value $${price}`;
-                          try {
-                            const { error } = await supabase.rpc('tm_create_event', {
-                              p_username: adminEnvUser,
-                              p_password: adminEnvPass,
-                              p_id: id,
-                              p_label: label,
-                              p_type: 'ceiling',
-                              p_price: price,
-                            });
-                            if (error) { alert(`Failed to create event: ${error.message}`); return; }
-                            await refreshEvents();
-                            setEventId(id);
-                            setNewEventName('');
-                          } catch (e: any) {
-                            alert(e?.message || 'Failed to create event');
-                          }
-                        }}
-                      >
-                        Create
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </Card>
-          )}
-
           {/* MIDDLE: Charts (Market Distribution only) */}
           <div className="grid gap-6 lg:col-span-2 lg:grid-cols-1">
-            {eventId ? (
-              <Card className="p-5">
-                <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} — left bars = sellers, right bars = buyers`} />
-                <div className="h-80">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={marketDistribution} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" domain={[-20, 20]} tickFormatter={(v) => Math.abs(Number(v)).toString()} />
-                      <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
-                      <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
-                      <Legend />
-                      <Bar dataKey="seller" name="Sellers" fill="#3B82F6" />
-                      <Bar dataKey="buyer"  name="Buyers"  fill="#10B981" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Card>
-            ) : (
-              <Card className="p-5">
-                <SectionTitle title="Market Distribution" subtitle="Select an event to see the live market" />
-                <div className="text-sm text-gray-500">No event selected.</div>
-              </Card>
-            )}
+            <Card className="p-5">
+              <SectionTitle title="Market Distribution" subtitle={`Event: ${currentEvent?.label ?? ''} — left bars = sellers, right bars = buyers`} />
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={marketDistribution} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis type="number" domain={[-20, 20]} tickFormatter={(v) => Math.abs(Number(v)).toString()} />
+                    <YAxis dataKey="bucket" type="category" tick={{ fontSize: 12 }} width={70} />
+                    <Tooltip formatter={(v: any, name: any) => [Math.abs(Number(v)), name]} />
+                    <Legend />
+                    <Bar dataKey="seller" name="Sellers" fill="#3B82F6" />
+                    <Bar dataKey="buyer"  name="Buyers"  fill="#10B981" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Card>
           </div>
 
           {/* RIGHT: Chat (live) */}
           <Card className="p-5 lg:col-span-1">
-            <SectionTitle title="Community Chat" subtitle="Messages are public; be respectful." />
+            <SectionTitle title="Community Chat" subtitle="Messages are public; be respectful (max 250 chars)" />
             <div className="space-y-4">
               <div className="max-h-64 space-y-3 overflow-y-auto rounded-lg bg-gray-50 p-3">
                 {chat.map((c) => (
@@ -1526,7 +1288,7 @@ export default function TicketMarket() {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
                 <Label>Full Name</Label>
-                <Input value={pfFullName || currentUser.full_name || ''} onChange={(e)=>setPfFullName(e.target.value)} />
+                <Input value={pfFullName || currentUser.full_name} onChange={(e)=>setPfFullName(e.target.value)} />
               </div>
               <div>
                 <Label>Auth Email</Label>
@@ -1543,7 +1305,7 @@ export default function TicketMarket() {
               </div>
               <div>
                 <Label>School Email (.edu)</Label>
-                <Input value={pfSchoolEmail || currentUser.school_email || ''} onChange={(e)=>setPfSchoolEmail(e.target.value)} />
+                <Input value={pfSchoolEmail || currentUser.school_email} onChange={(e)=>setPfSchoolEmail(e.target.value)} />
               </div>
               <div>
                 <Label>Phone (WhatsApp)</Label>
@@ -1551,29 +1313,20 @@ export default function TicketMarket() {
                   <Select className="w-28" value={pfAreaCode} onChange={(e)=>setPfAreaCode(e.target.value)}>
                     {AREA_CODES.map((c)=> <option key={c} value={c}>{c}</option>)}
                   </Select>
-                  <Input
-                    value={pfPhoneDigits}
-                    onChange={(e)=>setPfPhoneDigits(e.target.value)}
-                    placeholder={parseE164(currentUser.phone_e164 || '').digits}
-                  />
+                  <Input value={pfPhoneDigits} onChange={(e)=>setPfPhoneDigits(e.target.value)} placeholder={currentUser.phone_e164.replace(/^\+\d+/, '')} />
                 </div>
               </div>
               <div>
                 <Label>Venmo</Label>
-                <Input value={pfVenmo || currentUser.venmo_handle || ''} onChange={(e)=>setPfVenmo(e.target.value)} />
+                <Input value={pfVenmo || currentUser.venmo_handle} onChange={(e)=>setPfVenmo(e.target.value)} />
               </div>
               <div className="md:col-span-2">
                 <Label>Bio</Label>
-                <input className="w-full rounded-xl border border-gray-300 px-3 py-2" value={pfBio || currentUser.bio || ''} onChange={(e)=>setPfBio(e.target.value)} />
+                <input className="w-full rounded-xl border border-gray-300 px-3 py-2" value={pfBio || currentUser.bio} onChange={(e)=>setPfBio(e.target.value)} />
               </div>
               {pfError && <div className="text-red-600 text-sm md:col-span-2">{pfError}</div>}
-              {pfSuccess && (
-                <div className="md:col-span-2 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">
-                  Success: your profile is updated
-                </div>
-              )}
               <div className="md:col-span-2">
-                <Button type="button" onClick={saveProfile}>Update Profile</Button>
+                <Button type="button" onClick={saveProfile}>Save Profile</Button>
               </div>
             </div>
           </Card>
@@ -1588,15 +1341,9 @@ export default function TicketMarket() {
               <X size={18} />
             </button>
             <h3 className="mb-2 text-lg font-semibold">Ticketmatch</h3>
-            <div className="mb-4 text-base md:text-lg text-gray-700 leading-relaxed">
-              <p>
-                Trade tickets with data and automation; born out of necessity at Wharton as an MVP for
-                {' '}<a href="https://mbamove.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">mbamove.com</a>.
-              </p>
-              <p className="mt-2">
-                <a href="http://linkedin.com/in/andrewjbilden" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Andrew J. Bilden, WG26</a>
-              </p>
-            </div>
+            <p className="mb-4 text-sm text-gray-700">
+              Trade tickets with data and automation; born out of necessity at Wharton as an mvp for mbamove.com - Andrew J. Bilden WG26
+            </p>
             <div className="aspect-video w-full">
               <iframe
                 className="h-full w-full rounded-lg"
@@ -1624,13 +1371,26 @@ export default function TicketMarket() {
           <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-2 text-lg font-semibold">Complete Your Profile</h3>
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="md:col-span-2">
+                <Label>Auth Email</Label>
+                <Input value={pfEmail} readOnly />
+              </div>
               <div>
                 <Label>Full Name</Label>
                 <Input value={pfFullName} onChange={(e)=>setPfFullName(e.target.value)} placeholder="First Last" />
               </div>
               <div>
-                <Label>Auth Email</Label>
-                <Input value={pfEmail} readOnly />
+                <Label>School</Label>
+                <Select value={pfSchool} onChange={(e)=>setPfSchool(e.target.value as any)}>
+                  <option value="Wharton">Wharton</option>
+                  <option value="Penn">Penn</option>
+                  <option value="HBS">HBS</option>
+                  <option value="GSB">GSB</option>
+                </Select>
+              </div>
+              <div className="md:col-span-2">
+                <Label>School Email (.edu)</Label>
+                <Input value={pfSchoolEmail} onChange={(e)=>setPfSchoolEmail(e.target.value)} placeholder="you@school.edu" />
               </div>
               <div className="md:col-span-2">
                 <Label>Phone (WhatsApp)</Label>
@@ -1642,19 +1402,6 @@ export default function TicketMarket() {
                 </div>
               </div>
               <div className="md:col-span-2">
-                <Label>School Email (.edu)</Label>
-                <Input value={pfSchoolEmail} onChange={(e)=>setPfSchoolEmail(e.target.value)} placeholder="you@school.edu" />
-              </div>
-              <div>
-                <Label>School</Label>
-                <Select value={pfSchool} onChange={(e)=>setPfSchool(e.target.value as any)}>
-                  <option value="Wharton">Wharton</option>
-                  <option value="Penn">Penn</option>
-                  <option value="HBS">HBS</option>
-                  <option value="GSB">GSB</option>
-                </Select>
-              </div>
-              <div>
                 <Label>Venmo</Label>
                 <Input value={pfVenmo} onChange={(e)=>setPfVenmo(e.target.value)} placeholder="@yourhandle" />
               </div>
@@ -1664,10 +1411,9 @@ export default function TicketMarket() {
               </div>
             </div>
             {pfError && <div className="mt-2 text-sm text-red-600">{pfError}</div>}
-            {pfSuccess && <div className="mt-2 text-sm text-green-700 bg-green-50 rounded px-3 py-2">Success: your profile is updated</div>}
             <div className="mt-4 flex justify-end gap-2">
               <GhostButton onClick={() => setShowProfileModal(false)}>Close</GhostButton>
-              <Button onClick={saveProfile}>Update Profile</Button>
+              <Button onClick={saveProfile}>Save</Button>
             </div>
           </div>
         </div>
