@@ -44,8 +44,14 @@ const DeleteButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
     <X size={16} />
   </button>
 );
-const WeTradedButton: React.FC<{ onClick: () => void }> = ({ onClick }) => (
-  <button onClick={onClick} className="rounded-lg px-3 py-2 text-sm font-semibold bg-blue-600 text-white hover:bg-blue-500 transition">We Traded!</button>
+const WeTradedButton: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ onClick, disabled }) => (
+  <button
+    onClick={onClick}
+    disabled={disabled}
+    className="rounded-lg px-3 py-2 text-sm font-semibold bg-green-600 text-white hover:bg-green-500 disabled:opacity-50 transition"
+  >
+    We Traded!
+  </button>
 );
 
 /* =========================
@@ -118,7 +124,13 @@ const getDeviceId = (): string => {
   if (!id) { id = Math.random().toString(36).slice(2); localStorage?.setItem(k, id); }
   return id;
 };
-const isValidUsername = (u: string): boolean => /^[A-Za-z]+ [A-Za-z]+$/.test((u || '').trim());
+// More permissive: require at least two words; allow hyphens/apostrophes
+const isValidUsername = (u: string): boolean => {
+  const s = (u || '').trim();
+  const parts = s.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return false;
+  return parts.every(p => /^[A-Za-z][A-Za-z'\-]*$/.test(p));
+};
 const normalizeUsername = (u: string): string => (u || '').trim().replace(/\s+/, ' ');
 const isWhartonEmail = (e: string): boolean => /@wharton\.upenn\.edu$/i.test((e || '').trim());
 const buildE164 = (code: string, digits: string): string => {
@@ -206,6 +218,7 @@ export default function TicketMarket() {
   const [newEventName, setNewEventName] = useState<string>('');
   const [newEventType, setNewEventType] = useState<EventType>('market');
   const [newEventPrice, setNewEventPrice] = useState<number>(50);
+  const [weTradedPressed, setWeTradedPressed] = useState<Set<string>>(new Set());
 
   const currentEvent = useMemo(() => allEvents.find((e) => e.id === eventId), [allEvents, eventId]);
   const eventPrice = currentEvent?.price ?? 0;
@@ -510,44 +523,86 @@ export default function TicketMarket() {
     await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo } });
   };
 
-  /* -------- Save Profile -------- */
+  /* -------- Save/Update Profile -------- */
   const saveProfile = async () => {
     setPfError('');
-    const name = normalizeUsername(pfFullName);
-    if (!isValidUsername(name)) { setPfError('Please enter First Last'); return; }
-    if (!pfSchoolEmail.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
-    const ven = normalizeVenmo(pfVenmo);
-    if (!isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
-    const e164 = buildE164(pfAreaCode, pfPhoneDigits);
-    if (!isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
-    if (!pfBio.trim()) { setPfError('Bio is required'); return; }
-
     const { data: s } = await supabase.auth.getSession();
     const uid = s?.session?.user?.id;
     if (!uid) { setPfError('Not signed in'); return; }
 
+    // Use entered values if provided; otherwise fall back to current profile values
+    const name = normalizeUsername(pfFullName || currentUser?.full_name || '');
+    const cohortVal = (pfSchool || currentUser?.school || 'Wharton');
+    const ven = normalizeVenmo(pfVenmo || currentUser?.venmo_handle || '');
+    const schoolEmailVal = (pfSchoolEmail || currentUser?.school_email || '').trim();
+    const phoneDigits = (pfPhoneDigits || '').trim();
+    const e164 = phoneDigits ? buildE164(pfAreaCode, phoneDigits) : (currentUser?.phone_e164 || '');
+    const bioVal = (pfBio || currentUser?.bio || '').trim();
+
+    // Validate only the final values
+    if (!isValidUsername(name)) { setPfError('Please enter at least first and last name'); return; }
+    if (schoolEmailVal && !schoolEmailVal.toLowerCase().endsWith('.edu')) { setPfError('School email must end in .edu'); return; }
+    if (ven && !isValidVenmo(ven)) { setPfError('Enter a valid Venmo'); return; }
+    if (e164 && !isValidE164(e164)) { setPfError('Enter a valid phone number'); return; }
+    if (!bioVal) { setPfError('Bio is required'); return; }
+
+    // Build partial update payload to avoid overwriting with blanks
+    const payload: any = { id: uid };
+    if (name) payload.username = name;
+    if (cohortVal) payload.cohort = cohortVal as any;
+    if (e164) payload.phone_e164 = e164;
+    if (ven) payload.venmo_handle = ven;
+    if (schoolEmailVal) payload.wharton_email = schoolEmailVal;
+    if (bioVal) payload.bio = bioVal;
+
     try {
-      const { error } = await supabase.from('profiles').upsert({
-        id: uid,
-        username: name,
-        cohort: pfSchool, // reuse as school
-        phone_e164: e164,
-        venmo_handle: ven,
-        wharton_email: pfSchoolEmail,
-        bio: pfBio,
-      }, { onConflict: 'id' });
+      const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
       if (error) { setPfError(error.message); return; }
+
+      // Sync postings with only the fields we actually changed
+      const postUpdate: any = {};
+      if (payload.username) postUpdate.username = payload.username;
+      if (payload.phone_e164) postUpdate.phone_e164 = payload.phone_e164;
+      if (payload.cohort) postUpdate.cohort = payload.cohort;
+      if (payload.venmo_handle) postUpdate.venmo_handle = payload.venmo_handle;
+      if (payload.wharton_email) postUpdate.email = payload.wharton_email;
+      try { if (Object.keys(postUpdate).length) await supabase.from('postings_public').update(postUpdate).eq('user_id', uid); } catch {}
+      try { if (Object.keys(postUpdate).length) await supabase.from('market_postings').update(postUpdate).eq('user_id', uid); } catch {}
+
+      // Optimistically update local state
+      setPostings((prev) => prev.map(p => (
+        p.ownerId === uid ? { ...p,
+          ...(postUpdate.username ? { name: postUpdate.username } : {}),
+          ...(postUpdate.phone_e164 ? { phone: postUpdate.phone_e164 } : {}),
+          ...(postUpdate.cohort ? { cohort: postUpdate.cohort } : {}),
+          ...(postUpdate.venmo_handle ? { venmo: postUpdate.venmo_handle } : {}),
+          ...(postUpdate.email ? { email: postUpdate.email } : {}),
+        } : p
+      )));
+      setMarketPostings((prev) => prev.map(p => (
+        p.ownerId === uid ? { ...p,
+          ...(postUpdate.username ? { name: postUpdate.username } : {}),
+          ...(postUpdate.phone_e164 ? { phone: postUpdate.phone_e164 } : {}),
+          ...(postUpdate.cohort ? { cohort: postUpdate.cohort } : {}),
+          ...(postUpdate.venmo_handle ? { venmo: postUpdate.venmo_handle } : {}),
+          ...(postUpdate.email ? { email: postUpdate.email } : {}),
+        } : p
+      )));
+
       setCurrentUser({
         id: uid,
         full_name: name,
-        email: pfEmail,
-        school: pfSchool,
+        email: pfEmail || currentUser?.email || '',
+        school: cohortVal as any,
         phone_e164: e164,
         venmo_handle: ven,
-        school_email: pfSchoolEmail,
-        bio: pfBio,
+        school_email: schoolEmailVal,
+        bio: bioVal,
       });
-      setShowProfileModal(false);
+
+      // Close modal only if it was open and profile is now complete
+      const isComplete = isValidUsername(name) && (!!e164 && isValidE164(e164)) && (!!ven && isValidVenmo(ven)) && (!!schoolEmailVal && schoolEmailVal.toLowerCase().endsWith('.edu')) && !!bioVal;
+      if (!showProfileModal || isComplete) setShowProfileModal(false);
     } catch (e: any) {
       setPfError(e.message || 'Failed to save profile');
     }
@@ -809,61 +864,7 @@ export default function TicketMarket() {
 
         {/* Membership removed */}
 
-        {/* Event selection (visible to all); creation requires sign-in */}
-        <Card className="mb-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-6 md:items-end">
-            <div className="md:col-span-3">
-              <Label>Event</Label>
-              <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
-                {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
-              </Select>
-            </div>
-            {currentUser && (
-              <>
-                <div className="md:col-span-2">
-                  <Label>Create an Event</Label>
-                  <Input placeholder="Event name" value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} />
-                </div>
-                <div>
-                  <Label>Face Value</Label>
-                  <Input type="number" placeholder="Face Value $" value={newEventPrice} onChange={(e)=>setNewEventPrice(Number(e.target.value))} />
-                </div>
-                <div className="flex items-end">
-                  <Button type="button" onClick={async ()=>{
-                    const name = newEventName.trim();
-                    if (!name) { alert('Please enter an event name'); return; }
-                    const id = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
-                    const label = `${name} - Face Value $${newEventPrice}`;
-                    // Similarity check
-                    const norm = (s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-                    const nm = norm(name);
-                    const similar = [...allEvents].some(ev=>{
-                      const el = norm(ev.label);
-                      return el.includes(nm) || nm.includes(el) || ev.id === id;
-                    });
-                    if (similar) { alert('A similar event is already being traded'); return; }
-                    try {
-                      const { error } = await supabase.rpc('tm_create_event', {
-                        p_username: process.env.NEXT_PUBLIC_ADMIN_USER || 'admin',
-                        p_password: process.env.NEXT_PUBLIC_ADMIN_PASS || 'marketmaker',
-                        p_id: id || `evt-${Date.now()}`,
-                        p_label: label,
-                        p_type: 'ceiling',
-                        p_price: newEventPrice,
-                      });
-                      if (error) { alert(error.message); return; }
-                      await refreshEvents();
-                      setNewEventName('');
-                      setEventId(id);
-                    } catch (e:any) {
-                      alert('Event creation not configured');
-                    }
-                  }}>Create</Button>
-                </div>
-              </>
-            )}
-          </div>
-        </Card>
+        
 
         {/* Auth */}
         {!currentUser ? (
@@ -1036,42 +1037,47 @@ export default function TicketMarket() {
                 const mm = myMarketMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="space-y-3 text-sm">
-                    {mm.slice(0, 50).map((m, i) => {
-                      const buyer = m.me.role === 'buyer' ? m.me : m.other;
-                      const seller = m.me.role === 'seller' ? m.me : m.other;
-                      return (
-                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-3 text-white">
-                          <div className="mb-2 flex items-center justify-between font-semibold">
-                            <span>{seller.name} ↔ {buyer.name}</span>
-                            <WeTradedButton onClick={async () => {
-                              try {
-                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: 1, p_source: 'market' });
-                              } catch {}
-                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: 1, timestamp: new Date() }]);
-                              setTotalTradedTickets((prev) => prev + 1);
-                            }} />
-                          </div>
-                          <div className="grid grid-cols-2 gap-3 text-xs">
-                            <div>
-                              <div className="font-semibold mb-1">Seller</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{seller.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{seller.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{seller.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{seller.venmo}</span></div>
+                  <div className="overflow-x-auto">
+                    <div className="flex flex-nowrap gap-4 pb-2">
+                      {mm.slice(0, 50).map((m, i) => {
+                        const buyer = m.me.role === 'buyer' ? m.me : m.other;
+                        const seller = m.me.role === 'seller' ? m.me : m.other;
+                        const key = `market:${seller.userId}:${buyer.userId}:${eventId}:${m.agreedPrice}`;
+                        const pressed = weTradedPressed.has(key);
+                        return (
+                          <div key={i} className="shrink-0 min-w-[50%] rounded-xl border border-blue-700 bg-blue-700 p-4 text-white text-base">
+                            <div className="mb-3 flex items-center justify-between">
+                              <span className="text-xl font-bold">Ticket</span>
+                              <WeTradedButton disabled={pressed} onClick={async () => {
+                                if (pressed) return;
+                                try {
+                                  await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: m.agreedPrice, p_tickets: 1, p_source: 'market' });
+                                } catch {}
+                                setWeTradedPressed(prev => new Set(prev).add(key));
+                                setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: m.agreedPrice, tickets: 1, timestamp: new Date() }]);
+                                setTotalTradedTickets((prev) => prev + 1);
+                              }} />
                             </div>
-                            <div>
-                              <div className="font-semibold mb-1">Buyer</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{buyer.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{buyer.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{buyer.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{buyer.venmo}</span></div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <div className="font-semibold mb-1">Seller</div>
+                                <div>{seller.name}</div>
+                                <div>{seller.email || '—'}</div>
+                                <div>{seller.phone || '—'}</div>
+                                <div>@{seller.venmo || '—'}</div>
+                              </div>
+                              <div>
+                                <div className="font-semibold mb-1">Buyer</div>
+                                <div>{buyer.name}</div>
+                                <div>{buyer.email || '—'}</div>
+                                <div>{buyer.phone || '—'}</div>
+                                <div>@{buyer.venmo || '—'}</div>
+                              </div>
                             </div>
                           </div>
-                          {/* price hidden inside ticket per requirements */}
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })()
@@ -1080,47 +1086,108 @@ export default function TicketMarket() {
                 const mm = myMatches;
                 if (!mm.length) return <div className="text-sm text-gray-400">No matches yet</div>;
                 return (
-                  <div className="space-y-3 text-sm">
-                    {mm.slice(0, 50).map((m, i) => {
-                      const buyer = m.me.role === 'buyer' ? m.me : m.other;
-                      const seller = m.me.role === 'seller' ? m.me : m.other;
-                      const agreedPct = m.agreedPct;
-                      return (
-                        <div key={i} className="rounded-lg border border-blue-700 bg-blue-700 p-3 text-white">
-                          <div className="mb-2 flex items-center justify-between font-semibold">
-                            <span>{seller.name} ↔ {buyer.name}</span>
-                            <WeTradedButton onClick={async () => {
-                              try {
-                                await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: 1, p_source: 'ceiling' });
-                              } catch {}
-                              setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: 1, timestamp: new Date() }]);
-                              setTotalTradedTickets((prev) => prev + 1);
-                            }} />
-                          </div>
-                          <div className="grid grid-cols-2 gap-3 text-xs">
-                            <div>
-                              <div className="font-semibold mb-1">Seller</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{seller.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{seller.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{seller.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{seller.venmo}</span></div>
+                  <div className="overflow-x-auto">
+                    <div className="flex flex-nowrap gap-4 pb-2">
+                      {mm.slice(0, 50).map((m, i) => {
+                        const buyer = m.me.role === 'buyer' ? m.me : m.other;
+                        const seller = m.me.role === 'seller' ? m.me : m.other;
+                        const agreedPct = m.agreedPct;
+                        const key = `ceiling:${seller.userId}:${buyer.userId}:${eventId}:${agreedPct}`;
+                        const pressed = weTradedPressed.has(key);
+                        return (
+                          <div key={i} className="shrink-0 min-w-[50%] rounded-xl border border-blue-700 bg-blue-700 p-4 text-white text-base">
+                            <div className="mb-3 flex items-center justify-between">
+                              <span className="text-xl font-bold">Ticket</span>
+                              <WeTradedButton disabled={pressed} onClick={async () => {
+                                if (pressed) return;
+                                try {
+                                  await supabase.rpc('tm_we_traded', { p_buyer: buyer.userId, p_seller: seller.userId, p_event_id: eventId, p_price: (agreedPct/100)*eventPrice, p_tickets: 1, p_source: 'ceiling' });
+                                } catch {}
+                                setWeTradedPressed(prev => new Set(prev).add(key));
+                                setTrades((prev) => [...prev, { id: String(Date.now()), buyerName: buyer.name, sellerName: seller.name, eventId, price: (agreedPct/100)*eventPrice, tickets: 1, timestamp: new Date() }]);
+                                setTotalTradedTickets((prev) => prev + 1);
+                              }} />
                             </div>
-                            <div>
-                              <div className="font-semibold mb-1">Buyer</div>
-                              <div className="flex justify-between"><span className="opacity-80">Name:</span><span>{buyer.name}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">School Email:</span><span>{buyer.email}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Phone:</span><span>{buyer.phone}</span></div>
-                              <div className="flex justify-between"><span className="opacity-80">Venmo:</span><span>@{buyer.venmo}</span></div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <div className="font-semibold mb-1">Seller</div>
+                                <div>{seller.name}</div>
+                                <div>{seller.email || '—'}</div>
+                                <div>{seller.phone || '—'}</div>
+                                <div>@{seller.venmo || '—'}</div>
+                              </div>
+                              <div>
+                                <div className="font-semibold mb-1">Buyer</div>
+                                <div>{buyer.name}</div>
+                                <div>{buyer.email || '—'}</div>
+                                <div>{buyer.phone || '—'}</div>
+                                <div>@{buyer.venmo || '—'}</div>
+                              </div>
                             </div>
                           </div>
-                          {/* price hidden inside ticket per requirements */}
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 );
               })()
             )}
+          </Card>
+
+          {/* Event selection (moved below Matches) */}
+          <Card className="p-5 lg:col-span-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-6 md:items-end">
+              <div className="md:col-span-3">
+                <Label>Event</Label>
+                <Select value={eventId} onChange={(e) => setEventId(e.target.value)}>
+                  {allEvents.map((ev) => <option key={ev.id} value={ev.id}>{ev.label}</option>)}
+                </Select>
+              </div>
+              {currentUser && (
+                <>
+                  <div className="md:col-span-2">
+                    <Label>Create an Event</Label>
+                    <Input placeholder="Event name" value={newEventName} onChange={(e)=>setNewEventName(e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Face Value</Label>
+                    <Input type="number" placeholder="Face Value $" value={newEventPrice} onChange={(e)=>setNewEventPrice(Number(e.target.value))} />
+                  </div>
+                  <div className="flex items-end">
+                    <Button type="button" onClick={async ()=>{
+                      const name = newEventName.trim();
+                      if (!name) { alert('Please enter an event name'); return; }
+                      const id = name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'');
+                      const label = `${name} - Face Value $${newEventPrice}`;
+                      // Similarity check
+                      const norm = (s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+                      const nm = norm(name);
+                      const similar = [...allEvents].some(ev=>{
+                        const el = norm(ev.label);
+                        return el.includes(nm) || nm.includes(el) || ev.id === id;
+                      });
+                      if (similar) { alert('A similar event is already being traded'); return; }
+                      try {
+                        const { error } = await supabase.rpc('tm_create_event', {
+                          p_username: process.env.NEXT_PUBLIC_ADMIN_USER || 'admin',
+                          p_password: process.env.NEXT_PUBLIC_ADMIN_PASS || 'marketmaker',
+                          p_id: id || `evt-${Date.now()}`,
+                          p_label: label,
+                          p_type: 'ceiling',
+                          p_price: newEventPrice,
+                        });
+                        if (error) { alert(error.message); return; }
+                        await refreshEvents();
+                        setNewEventName('');
+                        setEventId(id);
+                      } catch (e:any) {
+                        alert('Event creation not configured');
+                      }
+                    }}>Create</Button>
+                  </div>
+                </>
+              )}
+            </div>
           </Card>
 
           {/* My Listings was moved above */}
@@ -1329,7 +1396,7 @@ export default function TicketMarket() {
               </div>
               {pfError && <div className="text-red-600 text-sm md:col-span-2">{pfError}</div>}
               <div className="md:col-span-2">
-                <Button type="button" onClick={saveProfile}>Save Profile</Button>
+                <Button type="button" onClick={saveProfile}>Update Profile</Button>
               </div>
             </div>
           </Card>
@@ -1416,7 +1483,7 @@ export default function TicketMarket() {
             {pfError && <div className="mt-2 text-sm text-red-600">{pfError}</div>}
             <div className="mt-4 flex justify-end gap-2">
               <GhostButton onClick={() => setShowProfileModal(false)}>Close</GhostButton>
-              <Button onClick={saveProfile}>Save</Button>
+              <Button onClick={saveProfile}>Update</Button>
             </div>
           </div>
         </div>
