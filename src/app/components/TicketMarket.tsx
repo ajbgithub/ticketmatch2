@@ -1383,7 +1383,11 @@ export default function TicketMarket() {
                   <Select className="w-28" value={pfAreaCode} onChange={(e)=>setPfAreaCode(e.target.value)}>
                     {AREA_CODES.map((c)=> <option key={c} value={c}>{c}</option>)}
                   </Select>
-                  <Input value={pfPhoneDigits} onChange={(e)=>setPfPhoneDigits(e.target.value)} placeholder={currentUser.phone_e164.replace(/^\+\d+/, '')} />
+                  <Input
+                    value={pfPhoneDigits}
+                    onChange={(e)=>setPfPhoneDigits(e.target.value)}
+                    placeholder={currentUser.phone_e164 ? currentUser.phone_e164.replace(/^\+\d+/, '') : ''}
+                  />
                 </div>
               </div>
               <div>
